@@ -45,6 +45,13 @@
             <artifactId>log4j</artifactId>
             <version>1.2.17</version>
         </dependency>
+       
+  <!-- added by zhuhp for 3.4.13 -->
+        <dependency>
+            <groupId>org.apache.yetus</groupId>
+            <artifactId>audience-annotations</artifactId>
+            <version>0.6.0</version>
+        </dependency>
 
 
     </dependencies>

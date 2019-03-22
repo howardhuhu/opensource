@@ -21,7 +21,9 @@ import java.io.File;
 import java.io.IOException;
 
 import javax.management.JMException;
+import javax.security.sasl.SaslException;
 
+import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.zookeeper.jmx.ManagedUtil;
@@ -60,6 +62,7 @@ import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
  * "myid" that contains the server id as an ASCII decimal value.
  *
  */
+@InterfaceAudience.Public
 public class QuorumPeerMain {
     private static final Logger LOG = LoggerFactory.getLogger(QuorumPeerMain.class);
 
@@ -129,31 +132,51 @@ public class QuorumPeerMain {
           ServerCnxnFactory cnxnFactory = ServerCnxnFactory.createFactory();
           cnxnFactory.configure(config.getClientPortAddress(),
                                 config.getMaxClientCnxns());
-  
-          quorumPeer = new QuorumPeer();
-          quorumPeer.setClientPortAddress(config.getClientPortAddress());
-          quorumPeer.setTxnFactory(new FileTxnSnapLog(
-                      new File(config.getDataLogDir()),
-                      new File(config.getDataDir())));
+
+          quorumPeer = getQuorumPeer();
+
           quorumPeer.setQuorumPeers(config.getServers());
+          quorumPeer.setTxnFactory(new FileTxnSnapLog(
+                  new File(config.getDataLogDir()),
+                  new File(config.getDataDir())));
           quorumPeer.setElectionType(config.getElectionAlg());
           quorumPeer.setMyid(config.getServerId());
           quorumPeer.setTickTime(config.getTickTime());
-          quorumPeer.setMinSessionTimeout(config.getMinSessionTimeout());
-          quorumPeer.setMaxSessionTimeout(config.getMaxSessionTimeout());
           quorumPeer.setInitLimit(config.getInitLimit());
           quorumPeer.setSyncLimit(config.getSyncLimit());
-          quorumPeer.setQuorumVerifier(config.getQuorumVerifier());
+          quorumPeer.setQuorumListenOnAllIPs(config.getQuorumListenOnAllIPs());
           quorumPeer.setCnxnFactory(cnxnFactory);
+          quorumPeer.setQuorumVerifier(config.getQuorumVerifier());
+          quorumPeer.setClientPortAddress(config.getClientPortAddress());
+          quorumPeer.setMinSessionTimeout(config.getMinSessionTimeout());
+          quorumPeer.setMaxSessionTimeout(config.getMaxSessionTimeout());
           quorumPeer.setZKDatabase(new ZKDatabase(quorumPeer.getTxnFactory()));
           quorumPeer.setLearnerType(config.getPeerType());
-  
+          quorumPeer.setSyncEnabled(config.getSyncEnabled());
+
+          // sets quorum sasl authentication configurations
+          quorumPeer.setQuorumSaslEnabled(config.quorumEnableSasl);
+          if(quorumPeer.isQuorumSaslAuthEnabled()){
+              quorumPeer.setQuorumServerSaslRequired(config.quorumServerRequireSasl);
+              quorumPeer.setQuorumLearnerSaslRequired(config.quorumLearnerRequireSasl);
+              quorumPeer.setQuorumServicePrincipal(config.quorumServicePrincipal);
+              quorumPeer.setQuorumServerLoginContext(config.quorumServerLoginContext);
+              quorumPeer.setQuorumLearnerLoginContext(config.quorumLearnerLoginContext);
+          }
+
+          quorumPeer.setQuorumCnxnThreadsSize(config.quorumCnxnThreadsSize);
+          quorumPeer.initialize();
+
           quorumPeer.start();
           quorumPeer.join();
       } catch (InterruptedException e) {
-          //该阶段，只有这一种异常可以被'容忍'，不会导致zk无法启动 ，理论上这个异常只会由join方法抛出  zhuhp
           // warn, but generally this is ok
           LOG.warn("Quorum Peer interrupted", e);
       }
+    }
+
+    // @VisibleForTesting
+    protected QuorumPeer getQuorumPeer() throws SaslException {
+        return new QuorumPeer();
     }
 }

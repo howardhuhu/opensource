@@ -20,6 +20,8 @@
 package org.apache.zookeeper.proto;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class GetACLResponse implements Record {
   private java.util.List<org.apache.zookeeper.data.ACL> acl;
   private org.apache.zookeeper.data.Stat stat;

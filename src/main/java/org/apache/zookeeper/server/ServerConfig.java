@@ -21,6 +21,7 @@ package org.apache.zookeeper.server;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
 
+import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.server.quorum.QuorumPeerConfig;
 import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
 
@@ -30,6 +31,7 @@ import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
  * We use this instead of Properties as it's typed.
  *
  */
+@InterfaceAudience.Public
 public class ServerConfig {
     ////
     //// If you update the configuration parameters be sure
@@ -47,20 +49,19 @@ public class ServerConfig {
 
     /**
      * Parse arguments for server configuration
-     * @param args clientPort dataDir and optional tickTime
+     * @param args clientPort dataDir and optional tickTime and maxClientCnxns
      * @return ServerConfig configured wrt arguments
      * @throws IllegalArgumentException on invalid usage
      */
     public void parse(String[] args) {
         if (args.length < 2 || args.length > 4) {
-            throw new IllegalArgumentException("Invalid args:"
-                    + Arrays.toString(args));
+            throw new IllegalArgumentException("Invalid number of arguments:" + Arrays.toString(args));
         }
 
         clientPortAddress = new InetSocketAddress(Integer.parseInt(args[0]));
         dataDir = args[1];
         dataLogDir = dataDir;
-        if (args.length == 3) {
+        if (args.length >= 3) {
             tickTime = Integer.parseInt(args[2]);
         }
         if (args.length == 4) {

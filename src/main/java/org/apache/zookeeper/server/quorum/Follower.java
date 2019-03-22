@@ -18,12 +18,12 @@
 
 package org.apache.zookeeper.server.quorum;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 
-import org.apache.jute.BinaryInputArchive;
 import org.apache.jute.Record;
+import org.apache.zookeeper.common.Time;
+import org.apache.zookeeper.server.quorum.QuorumPeer.QuorumServer;
 import org.apache.zookeeper.server.util.SerializeUtils;
 import org.apache.zookeeper.server.util.ZxidUtils;
 import org.apache.zookeeper.txn.TxnHeader;
@@ -59,16 +59,17 @@ public class Follower extends Learner{
      * @throws InterruptedException
      */
     void followLeader() throws InterruptedException {
-        self.end_fle = System.currentTimeMillis();
-        LOG.info("FOLLOWING - LEADER ELECTION TOOK - " +
-              (self.end_fle - self.start_fle));
+        self.end_fle = Time.currentElapsedTime();
+        long electionTimeTaken = self.end_fle - self.start_fle;
+        self.setElectionTimeTaken(electionTimeTaken);
+        LOG.info("FOLLOWING - LEADER ELECTION TOOK - {}", electionTimeTaken);
         self.start_fle = 0;
         self.end_fle = 0;
         fzk.registerJMX(new FollowerBean(this, zk), self.jmxLocalPeerBean);
         try {
-            InetSocketAddress addr = findLeader();            
+            QuorumServer leaderServer = findLeader();            
             try {
-                connectToLeader(addr);
+                connectToLeader(leaderServer.addr, leaderServer.hostname);
                 long newEpochZxid = registerWithLeader(Leader.FOLLOWERINFO);
 
                 //check to see if the leader zxid is lower than ours
@@ -81,11 +82,11 @@ public class Follower extends Learner{
                 }
                 syncWithLeader(newEpochZxid);                
                 QuorumPacket qp = new QuorumPacket();
-                while (self.isRunning()) {
+                while (this.isRunning()) {
                     readPacket(qp);
                     processPacket(qp);
                 }
-            } catch (IOException e) {
+            } catch (Exception e) {
                 LOG.warn("Exception when following the leader", e);
                 try {
                     sock.close();
@@ -135,6 +136,8 @@ public class Follower extends Learner{
         case Leader.SYNC:
             fzk.sync();
             break;
+        default:
+            LOG.error("Invalid packet type: {} received by Observer", qp.getType());
         }
     }
 

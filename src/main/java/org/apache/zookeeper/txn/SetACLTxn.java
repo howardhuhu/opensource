@@ -20,6 +20,8 @@
 package org.apache.zookeeper.txn;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class SetACLTxn implements Record {
   private String path;
   private java.util.List<org.apache.zookeeper.data.ACL> acl;

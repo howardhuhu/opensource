@@ -30,6 +30,8 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import javax.security.sasl.SaslException;
 
@@ -107,10 +109,14 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
     protected SessionTracker sessionTracker;
     private FileTxnSnapLog txnLogFactory = null;
     private ZKDatabase zkDb;
-    protected long hzxid = 0;
+    private final AtomicLong hzxid = new AtomicLong(0);
     public final static Exception ok = new Exception("No prob");
     protected RequestProcessor firstProcessor;
-    protected volatile boolean running;
+    protected volatile State state = State.INITIAL;
+
+    protected enum State {
+        INITIAL, RUNNING, SHUTDOWN, ERROR;
+    }
 
     /**
      * This is the secret that we use to generate passwords, for the moment it
@@ -118,7 +124,7 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
      */
     static final private long superSecret = 0XB3415C00L;
 
-    int requestsInProcess;
+    private final AtomicInteger requestsInProcess = new AtomicInteger(0);
     final List<ChangeRecord> outstandingChanges = new ArrayList<ChangeRecord>();
     // this data structure must be accessed under the outstandingChanges lock
     final HashMap<String, ChangeRecord> outstandingChangesForPath =
@@ -127,6 +133,8 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
     private ServerCnxnFactory serverCnxnFactory;
 
     private final ServerStats serverStats;
+    private final ZooKeeperServerListener listener;
+    private ZooKeeperServerShutdownHandler zkShutdownHandler;
 
     void removeCnxn(ServerCnxn cnxn) {
         zkDb.removeCnxn(cnxn);
@@ -141,6 +149,7 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
      */
     public ZooKeeperServer() {
         serverStats = new ServerStats(this);
+        listener = new ZooKeeperServerListenerImpl(this);
     }
     
     /**
@@ -154,11 +163,14 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
             DataTreeBuilder treeBuilder, ZKDatabase zkDb) {
         serverStats = new ServerStats(this);
         this.txnLogFactory = txnLogFactory;
+        this.txnLogFactory.setServerStats(this.serverStats);
         this.zkDb = zkDb;
         this.tickTime = tickTime;
         this.minSessionTimeout = minSessionTimeout;
         this.maxSessionTimeout = maxSessionTimeout;
-        
+
+        listener = new ZooKeeperServerListenerImpl(this);
+
         LOG.info("Created server with tickTime " + tickTime
                 + " minSessionTimeout " + getMinSessionTimeout()
                 + " maxSessionTimeout " + getMaxSessionTimeout()
@@ -247,7 +259,31 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
      *  Restore sessions and data
      */
     public void loadData() throws IOException, InterruptedException {
-        setZxid(zkDb.loadDataBase());
+        /*
+         * When a new leader starts executing Leader#lead, it 
+         * invokes this method. The database, however, has been
+         * initialized before running leader election so that
+         * the server could pick its zxid for its initial vote.
+         * It does it by invoking QuorumPeer#getLastLoggedZxid.
+         * Consequently, we don't need to initialize it once more
+         * and avoid the penalty of loading it a second time. Not 
+         * reloading it is particularly important for applications
+         * that host a large database.
+         * 
+         * The following if block checks whether the database has
+         * been initialized or not. Note that this method is
+         * invoked by at least one other method: 
+         * ZooKeeperServer#startdata.
+         *  
+         * See ZOOKEEPER-1642 for more detail.
+         */
+        if(zkDb.isInitialized()){
+            setZxid(zkDb.getDataTreeLastProcessedZxid());
+        }
+        else {
+            setZxid(zkDb.loadDataBase());
+        }
+        
         // Clean up dead sessions
         LinkedList<Long> deadSessions = new LinkedList<Long>();
         for (Long session : zkDb.getSessions()) {
@@ -260,12 +296,10 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
             // XXX: Is lastProcessedZxid really the best thing to use?
             killSession(session, zkDb.getDataTreeLastProcessedZxid());
         }
-
-        // Make a clean snapshot
-        takeSnapshot();
     }
 
     public void takeSnapshot(){
+
         try {
             txnLogFactory.save(zkDb.getDataTree(), zkDb.getSessionWithTimeOuts());
         } catch (IOException e) {
@@ -280,20 +314,16 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
     /**
      * This should be called from a synchronized block on this!
      */
-    synchronized public long getZxid() {
-        return hzxid;
+    public long getZxid() {
+        return hzxid.get();
     }
 
-    synchronized long getNextZxid() {
-        return ++hzxid;
+    long getNextZxid() {
+        return hzxid.incrementAndGet();
     }
 
-    synchronized public void setZxid(long zxid) {
-        hzxid = zxid;
-    }
-
-    long getTime() {
-        return System.currentTimeMillis();
+    public void setZxid(long zxid) {
+        hzxid.set(zxid);
     }
 
     private void close(long sessionId) {
@@ -378,7 +408,7 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
         }
     }
     
-    public void startup() {        
+    public synchronized void startup() {
         if (sessionTracker == null) {
             createSessionTracker();
         }
@@ -387,10 +417,8 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
 
         registerJMX();
 
-        synchronized (this) {
-            running = true;
-            notifyAll();
-        }
+        setState(State.RUNNING);
+        notifyAll();
     }
 
     protected void setupRequestProcessors() {
@@ -402,24 +430,79 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
         ((PrepRequestProcessor)firstProcessor).start();
     }
 
+    public ZooKeeperServerListener getZooKeeperServerListener() {
+        return listener;
+    }
+
     protected void createSessionTracker() {
         sessionTracker = new SessionTrackerImpl(this, zkDb.getSessionWithTimeOuts(),
-                tickTime, 1);
+                tickTime, 1, getZooKeeperServerListener());
     }
     
     protected void startSessionTracker() {
         ((SessionTrackerImpl)sessionTracker).start();
     }
 
+    /**
+     * Sets the state of ZooKeeper server. After changing the state, it notifies
+     * the server state change to a registered shutdown handler, if any.
+     * <p>
+     * The following are the server state transitions:
+     * <li>During startup the server will be in the INITIAL state.</li>
+     * <li>After successfully starting, the server sets the state to RUNNING.
+     * </li>
+     * <li>The server transitions to the ERROR state if it hits an internal
+     * error. {@link ZooKeeperServerListenerImpl} notifies any critical resource
+     * error events, e.g., SyncRequestProcessor not being able to write a txn to
+     * disk.</li>
+     * <li>During shutdown the server sets the state to SHUTDOWN, which
+     * corresponds to the server not running.</li>
+     *
+     * @param state new server state.
+     */
+    protected void setState(State state) {
+        this.state = state;
+        // Notify server state changes to the registered shutdown handler, if any.
+        if (zkShutdownHandler != null) {
+            zkShutdownHandler.handle(state);
+        } else {
+            LOG.debug("ZKShutdownHandler is not registered, so ZooKeeper server "
+                    + "won't take any action on ERROR or SHUTDOWN server state changes");
+        }
+    }
+
+    /**
+     * This can be used while shutting down the server to see whether the server
+     * is already shutdown or not.
+     *
+     * @return true if the server is running or server hits an error, false
+     *         otherwise.
+     */
+    protected boolean canShutdown() {
+        return state == State.RUNNING || state == State.ERROR;
+    }
+
     public boolean isRunning() {
-        return running;
+        return state == State.RUNNING;
     }
 
     public void shutdown() {
+        shutdown(false);
+    }
+
+    /**
+     * Shut down the server instance
+     * @param fullyShutDown true if another server using the same database will not replace this one in the same process
+     */
+    public synchronized void shutdown(boolean fullyShutDown) {
+        if (!canShutdown()) {
+            LOG.debug("ZooKeeper server is not running, so not proceeding to shutdown!");
+            return;
+        }
         LOG.info("shutting down");
 
         // new RuntimeException("Calling shutdown").printStackTrace();
-        this.running = false;
+        setState(State.SHUTDOWN);
         // Since sessionTracker and syncThreads poll we just have to
         // set running to false and they will detect it during the poll
         // interval.
@@ -429,8 +512,24 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
         if (firstProcessor != null) {
             firstProcessor.shutdown();
         }
+
         if (zkDb != null) {
-            zkDb.clear();
+            if (fullyShutDown) {
+                zkDb.clear();
+            } else {
+                // else there is no need to clear the database
+                //  * When a new quorum is established we can still apply the diff
+                //    on top of the same zkDb data
+                //  * If we fetch a new snapshot from leader, the zkDb will be
+                //    cleared anyway before loading the snapshot
+                try {
+                    //This will fast forward the database to the latest recorded transactions
+                    zkDb.fastForwardDataBase();
+                } catch (IOException e) {
+                    LOG.error("Error updating DB", e);
+                    zkDb.clear();
+                }
+            }
         }
 
         unregisterJMX();
@@ -456,16 +555,16 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
         jmxDataTreeBean = null;
     }
 
-    synchronized public void incInProcess() {
-        requestsInProcess++;
+    public void incInProcess() {
+        requestsInProcess.incrementAndGet();
     }
 
-    synchronized public void decInProcess() {
-        requestsInProcess--;
+    public void decInProcess() {
+        requestsInProcess.decrementAndGet();
     }
 
     public int getInProcess() {
-        return requestsInProcess;
+        return requestsInProcess.get();
     }
 
     /**
@@ -499,7 +598,7 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
                 DataTree.copyStatPersisted(this.stat, stat);
             }
             return new ChangeRecord(zxid, path, stat, childCount,
-                    acl == null ? new ArrayList<ACL>() : new ArrayList(acl));
+                    acl == null ? new ArrayList<ACL>() : new ArrayList<ACL>(acl));
         }
     }
 
@@ -597,9 +696,9 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
                         + " with negotiated timeout " + cnxn.getSessionTimeout()
                         + " for client "
                         + cnxn.getRemoteSocketAddress());
+                cnxn.enableRecv();
             }
                 
-            cnxn.enableRecv();
         } catch (Exception e) {
             LOG.warn("Exception while establishing session, closing", e);
             cnxn.close();
@@ -613,6 +712,7 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
     public long getServerId() {
         return 0;
     }
+
     /**
      * @param cnxn
      * @param sessionId
@@ -629,13 +729,17 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
         if (firstProcessor == null) {
             synchronized (this) {
                 try {
-                    while (!running) {
+                    // Since all requests are passed to the request
+                    // processor it should wait for setting up the request
+                    // processor chain. The state will be updated to RUNNING
+                    // after the setup.
+                    while (state == State.INITIAL) {
                         wait(1000);
                     }
                 } catch (InterruptedException e) {
                     LOG.warn("Unexpected interruption", e);
                 }
-                if (firstProcessor == null) {
+                if (firstProcessor == null || state != State.RUNNING) {
                     throw new RuntimeException("Not started");
                 }
             }
@@ -649,8 +753,8 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
                     incInProcess();
                 }
             } else {
-                LOG.warn("Dropping packet at server of type " + si.type);
-                // if invalid packet drop the packet.
+                LOG.warn("Received packet at server of unknown type " + si.type);
+                new UnimplementedRequestProcessor().processRequest(si);
             }
         } catch (MissingSessionException e) {
             if (LOG.isDebugEnabled()) {
@@ -664,7 +768,14 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
     public static int getSnapCount() {
         String sc = System.getProperty("zookeeper.snapCount");
         try {
-            return Integer.parseInt(sc);
+            int snapCount = Integer.parseInt(sc);
+
+            // snapCount must be 2 or more. See org.apache.zookeeper.server.SyncRequestProcessor
+            if( snapCount < 2 ) {
+                LOG.warn("SnapCount should be 2 or more. Now, snapCount is reset to 2");
+                snapCount = 2;
+            }
+            return snapCount;
         } catch (Exception e) {
             return 100000;
         }
@@ -904,6 +1015,7 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
                 Record rsp = processSasl(incomingBuffer,cnxn);
                 ReplyHeader rh = new ReplyHeader(h.getXid(), 0, KeeperException.Code.OK.intValue());
                 cnxn.sendResponse(rh,rsp, "response"); // not sure about 3rd arg..what is it?
+                return;
             }
             else {
                 Request si = new Request(cnxn, cnxn.getSessionId(), h.getXid(),
@@ -936,7 +1048,7 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
                 }
             }
             catch (SaslException e) {
-                LOG.warn("Client failed to SASL authenticate: " + e);
+                LOG.warn("Client failed to SASL authenticate: " + e, e);
                 if ((System.getProperty("zookeeper.allowSaslFailedClients") != null)
                   &&
                   (System.getProperty("zookeeper.allowSaslFailedClients").equals("true"))) {
@@ -978,5 +1090,15 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
         return rc;
     }
 
-
+    /**
+     * This method is used to register the ZooKeeperServerShutdownHandler to get
+     * server's error or shutdown state change notifications.
+     * {@link ZooKeeperServerShutdownHandler#handle(State)} will be called for
+     * every server state changes {@link #setState(State)}.
+     *
+     * @param zkShutdownHandler shutdown handler
+     */
+    void registerServerShutdownHandler(ZooKeeperServerShutdownHandler zkShutdownHandler) {
+        this.zkShutdownHandler = zkShutdownHandler;
+    }
 }

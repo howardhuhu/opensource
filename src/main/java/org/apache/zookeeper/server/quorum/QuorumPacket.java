@@ -20,6 +20,8 @@
 package org.apache.zookeeper.server.quorum;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class QuorumPacket implements Record {
   private int type;
   private long zxid;
@@ -148,7 +150,7 @@ public class QuorumPacket implements Record {
     if (!ret) return ret;
     ret = (zxid==peer.zxid);
     if (!ret) return ret;
-    ret = Utils.bufEquals(data,peer.data);
+    ret = org.apache.jute.Utils.bufEquals(data,peer.data);
     if (!ret) return ret;
     ret = authinfo.equals(peer.authinfo);
     if (!ret) return ret;

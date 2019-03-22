@@ -20,6 +20,8 @@
 package org.apache.zookeeper.proto;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class SetACLResponse implements Record {
   private org.apache.zookeeper.data.Stat stat;
   public SetACLResponse() {

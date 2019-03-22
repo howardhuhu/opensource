@@ -20,6 +20,8 @@
 package org.apache.zookeeper.proto;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class MultiHeader implements Record {
   private int type;
   private boolean done;

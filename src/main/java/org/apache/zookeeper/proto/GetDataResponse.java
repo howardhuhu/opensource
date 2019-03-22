@@ -20,6 +20,8 @@
 package org.apache.zookeeper.proto;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class GetDataResponse implements Record {
   private byte[] data;
   private org.apache.zookeeper.data.Stat stat;
@@ -89,7 +91,7 @@ public class GetDataResponse implements Record {
     {
       byte[] my = data;
       byte[] ur = peer.data;
-      ret = Utils.compareBytes(my,0,my.length,ur,0,ur.length);
+      ret = org.apache.jute.Utils.compareBytes(my,0,my.length,ur,0,ur.length);
     }
     if (ret != 0) return ret;
     ret = stat.compareTo(peer.stat);
@@ -105,7 +107,7 @@ public class GetDataResponse implements Record {
     }
     GetDataResponse peer = (GetDataResponse) peer_;
     boolean ret = false;
-    ret = Utils.bufEquals(data,peer.data);
+    ret = org.apache.jute.Utils.bufEquals(data,peer.data);
     if (!ret) return ret;
     ret = stat.equals(peer.stat);
     if (!ret) return ret;

@@ -20,6 +20,8 @@
 package org.apache.zookeeper.proto;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class WatcherEvent implements Record {
   private int type;
   private int state;

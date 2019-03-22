@@ -20,9 +20,11 @@ package org.apache.zookeeper.server;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.concurrent.CountDownLatch;
 
 import javax.management.JMException;
 
+import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.zookeeper.jmx.ManagedUtil;
@@ -32,6 +34,7 @@ import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
 /**
  * This class starts and runs a standalone ZooKeeperServer.
  */
+@InterfaceAudience.Public
 public class ZooKeeperServerMain {
     private static final Logger LOG =
         LoggerFactory.getLogger(ZooKeeperServerMain.class);
@@ -93,16 +96,23 @@ public class ZooKeeperServerMain {
      */
     public void runFromConfig(ServerConfig config) throws IOException {
         LOG.info("Starting server");
+        FileTxnSnapLog txnLog = null;
         try {
             // Note that this thread isn't going to be doing anything else,
             // so rather than spawning another thread, we will just call
             // run() in this thread.
             // create a file logger url from the command line args
-            ZooKeeperServer zkServer = new ZooKeeperServer();
+            final ZooKeeperServer zkServer = new ZooKeeperServer();
+            // Registers shutdown handler which will be used to know the
+            // server error or shutdown state changes.
+            final CountDownLatch shutdownLatch = new CountDownLatch(1);
+            zkServer.registerServerShutdownHandler(
+                    new ZooKeeperServerShutdownHandler(shutdownLatch));
 
-            FileTxnSnapLog ftxn = new FileTxnSnapLog(new
-                   File(config.dataLogDir), new File(config.dataDir));
-            zkServer.setTxnLogFactory(ftxn);
+            txnLog = new FileTxnSnapLog(new File(config.dataLogDir), new File(
+                    config.dataDir));
+            txnLog.setServerStats(zkServer.serverStats());
+            zkServer.setTxnLogFactory(txnLog);
             zkServer.setTickTime(config.tickTime);
             zkServer.setMinSessionTimeout(config.minSessionTimeout);
             zkServer.setMaxSessionTimeout(config.maxSessionTimeout);
@@ -110,13 +120,22 @@ public class ZooKeeperServerMain {
             cnxnFactory.configure(config.getClientPortAddress(),
                     config.getMaxClientCnxns());
             cnxnFactory.startup(zkServer);
+            // Watch status of ZooKeeper server. It will do a graceful shutdown
+            // if the server is not running or hits an internal error.
+            shutdownLatch.await();
+            shutdown();
+
             cnxnFactory.join();
-            if (zkServer.isRunning()) {
-                zkServer.shutdown();
+            if (zkServer.canShutdown()) {
+                zkServer.shutdown(true);
             }
         } catch (InterruptedException e) {
             // warn, but generally this is ok
             LOG.warn("Server interrupted", e);
+        } finally {
+            if (txnLog != null) {
+                txnLog.close();
+            }
         }
     }
 
@@ -124,6 +143,13 @@ public class ZooKeeperServerMain {
      * Shutdown the serving instance
      */
     protected void shutdown() {
-        cnxnFactory.shutdown();
+        if (cnxnFactory != null) {
+            cnxnFactory.shutdown();
+        }
+    }
+
+    // VisibleForTesting
+    ServerCnxnFactory getCnxnFactory() {
+        return cnxnFactory;
     }
 }

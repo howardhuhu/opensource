@@ -20,6 +20,8 @@
 package org.apache.zookeeper.server.quorum;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class LearnerInfo implements Record {
   private long serverid;
   private int protocolVersion;

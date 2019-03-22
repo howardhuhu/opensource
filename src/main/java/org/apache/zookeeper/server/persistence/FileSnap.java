@@ -56,6 +56,9 @@ public class FileSnap implements SnapShot {
     private static final Logger LOG = LoggerFactory.getLogger(FileSnap.class);
     public final static int SNAP_MAGIC
         = ByteBuffer.wrap("ZKSN".getBytes()).getInt();
+
+    public static final String SNAPSHOT_FILE_PREFIX = "snapshot";
+
     public FileSnap(File snapDir) {
         this.snapDir = snapDir;
     }
@@ -104,7 +107,7 @@ public class FileSnap implements SnapShot {
         if (!foundValid) {
             throw new IOException("Not able to find valid snapshots in " + snapDir);
         }
-        dt.lastProcessedZxid = Util.getZxidFromName(snap.getName(), "snapshot");
+        dt.lastProcessedZxid = Util.getZxidFromName(snap.getName(), SNAPSHOT_FILE_PREFIX);
         return dt.lastProcessedZxid;
     }
 
@@ -152,7 +155,7 @@ public class FileSnap implements SnapShot {
      * @throws IOException
      */
     private List<File> findNValidSnapshots(int n) throws IOException {
-        List<File> files = Util.sortDataDir(snapDir.listFiles(),"snapshot", false);
+        List<File> files = Util.sortDataDir(snapDir.listFiles(), SNAPSHOT_FILE_PREFIX, false);
         int count = 0;
         List<File> list = new ArrayList<File>();
         for (File f : files) {
@@ -177,19 +180,21 @@ public class FileSnap implements SnapShot {
     /**
      * find the last n snapshots. this does not have
      * any checks if the snapshot might be valid or not
-     * @param the number of most recent snapshots 
+     * @param the number of most recent snapshots
      * @return the last n snapshots
      * @throws IOException
      */
     public List<File> findNRecentSnapshots(int n) throws IOException {
-        List<File> files = Util.sortDataDir(snapDir.listFiles(), "snapshot", false);
-        int i = 0;
+        List<File> files = Util.sortDataDir(snapDir.listFiles(), SNAPSHOT_FILE_PREFIX, false);
+        int count = 0;
         List<File> list = new ArrayList<File>();
         for (File f: files) {
-            if (i==n)
+            if (count == n)
                 break;
-            i++;
-            list.add(f);
+            if (Util.getZxidFromName(f.getName(), SNAPSHOT_FILE_PREFIX) != -1) {
+                count++;
+                list.add(f);
+            }
         }
         return list;
     }

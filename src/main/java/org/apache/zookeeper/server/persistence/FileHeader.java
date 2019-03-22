@@ -20,6 +20,8 @@
 package org.apache.zookeeper.server.persistence;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class FileHeader implements Record {
   private int magic;
   private int version;

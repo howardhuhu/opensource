@@ -18,8 +18,12 @@
 
 package org.apache.zookeeper.server.quorum.flexible;
 
-import java.util.HashSet;
+import java.util.Set;
 
+//import org.apache.zookeeper.server.quorum.QuorumCnxManager;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This class implements a validator for majority quorums. The 
@@ -27,6 +31,8 @@ import java.util.HashSet;
  *
  */
 public class QuorumMaj implements QuorumVerifier {
+    private static final Logger LOG = LoggerFactory.getLogger(QuorumMaj.class);
+    
     int half;
     
     /**
@@ -50,7 +56,7 @@ public class QuorumMaj implements QuorumVerifier {
     /**
      * Verifies if a set is a majority.
      */
-    public boolean containsQuorum(HashSet<Long> set){
+    public boolean containsQuorum(Set<Long> set){
         return (set.size() > half);
     }
     

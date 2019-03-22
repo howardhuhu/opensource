@@ -20,6 +20,8 @@
 package org.apache.zookeeper.txn;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class CreateTxn implements Record {
   private String path;
   private byte[] data;
@@ -158,7 +160,7 @@ public class CreateTxn implements Record {
     boolean ret = false;
     ret = path.equals(peer.path);
     if (!ret) return ret;
-    ret = Utils.bufEquals(data,peer.data);
+    ret = org.apache.jute.Utils.bufEquals(data,peer.data);
     if (!ret) return ret;
     ret = acl.equals(peer.acl);
     if (!ret) return ret;

@@ -31,12 +31,14 @@ import java.util.zip.CheckedInputStream;
 
 import org.apache.jute.BinaryInputArchive;
 import org.apache.jute.InputArchive;
+import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.data.StatPersisted;
 import org.apache.zookeeper.server.persistence.FileSnap;
 
 /**
  * Dump a snapshot file to stdout.
  */
+@InterfaceAudience.Public
 public class SnapshotFormatter {
 
     /**
@@ -87,13 +89,15 @@ public class SnapshotFormatter {
         synchronized(n) { // keep findbugs happy
             System.out.println(name);
             printStat(n.stat);
-            System.out.println("  dataLength = " + n.data.length);
+            if (n.data != null) {
+                System.out.println("  dataLength = " + n.data.length);
+            } else {
+                System.out.println("  no data");
+            }
             children = n.getChildren();
         }
-        if (children != null) {
-            for (String child : children) {
-                printZnode(dataTree, name + (name.equals("/") ? "" : "/") + child);
-            }
+        for (String child : children) {
+            printZnode(dataTree, name + (name.equals("/") ? "" : "/") + child);
         }
     }
 

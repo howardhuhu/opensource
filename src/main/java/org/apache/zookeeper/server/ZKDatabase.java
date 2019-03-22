@@ -201,7 +201,12 @@ public class ZKDatabase {
         return sessionsWithTimeouts;
     }
 
-    
+    private final PlayBackListener commitProposalPlaybackListener = new PlayBackListener() {
+        public void onTxnLoaded(TxnHeader hdr, Record txn){
+            addCommittedProposal(hdr, txn);
+        }
+    };
+
     /**
      * load the database from the disk onto memory and also add 
      * the transactions to the committedlog in memory.
@@ -209,22 +214,30 @@ public class ZKDatabase {
      * @throws IOException
      */
     public long loadDataBase() throws IOException {
-        PlayBackListener listener=new PlayBackListener(){
-            public void onTxnLoaded(TxnHeader hdr,Record txn){
-                Request r = new Request(null, 0, hdr.getCxid(),hdr.getType(),
-                        null, null);
-                r.txn = txn;
-                r.hdr = hdr;
-                r.zxid = hdr.getZxid();
-                addCommittedProposal(r);
-            }
-        };
-        
-        long zxid = snapLog.restore(dataTree,sessionsWithTimeouts,listener);
+        long zxid = snapLog.restore(dataTree, sessionsWithTimeouts, commitProposalPlaybackListener);
         initialized = true;
         return zxid;
     }
-    
+
+    /**
+     * Fast forward the database adding transactions from the committed log into memory.
+     * @return the last valid zxid.
+     * @throws IOException
+     */
+    public long fastForwardDataBase() throws IOException {
+        long zxid = snapLog.fastForwardFromEdits(dataTree, sessionsWithTimeouts, commitProposalPlaybackListener);
+        initialized = true;
+        return zxid;
+    }
+
+    private void addCommittedProposal(TxnHeader hdr, Record txn) {
+        Request r = new Request(null, 0, hdr.getCxid(), hdr.getType(), null, null);
+        r.txn = txn;
+        r.hdr = hdr;
+        r.zxid = hdr.getZxid();
+        addCommittedProposal(r);
+    }
+
     /**
      * maintains a list of last <i>committedLog</i>
      *  or so committed requests. This is used for
@@ -232,13 +245,11 @@ public class ZKDatabase {
      * @param request committed request
      */
     public void addCommittedProposal(Request request) {
-        WriteLock wl = logLock.writeLock();//设置并发  zhuhp
+        WriteLock wl = logLock.writeLock();
         try {
-            wl.lock();  //设置写锁
+            wl.lock();
             if (committedLog.size() > commitLogCount) {
-                committedLog.removeFirst(); //怎么理解？满足500个就删除'最旧的'那条数据？ zhuhp
-                //那么这个commitedLog什么时候被写入到真正的文件中去呢 zhuhp ;
-                //解答： 这个commitedLog其实只是leader和follower之间同步时用的，log中的内容已经被解析到zkDb的datatree中了
+                committedLog.removeFirst();
                 minCommittedLog = committedLog.getFirst().packet.getZxid();
             }
             if (committedLog.size() == 0) {
@@ -246,24 +257,10 @@ public class ZKDatabase {
                 maxCommittedLog = request.zxid;
             }
 
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            BinaryOutputArchive boa = BinaryOutputArchive.getArchive(baos);
-            try {
-                request.hdr.serialize(boa, "hdr");
-                if (request.txn != null) {
-                    request.txn.serialize(boa, "txn");
-                }
-                baos.close();//这个貌似不需要关闭  zhuhp
-            } catch (IOException e) {
-                LOG.error("This really should be impossible", e);
-            }
-            QuorumPacket pp = new QuorumPacket(Leader.PROPOSAL, request.zxid,
-                    baos.toByteArray(), null);
+            //
+            byte[] data = SerializeUtils.serializeRequest(request);
+            QuorumPacket pp = new QuorumPacket(Leader.PROPOSAL, request.zxid, data, null);
             Proposal p = new Proposal();
-            //zhuhp[TODO];QuorumPacket 包括三个部分，一个是类型，从日志中恢复出来的信息，构建的是Leader.PROPOSAL类型的信息
-            //zhuhp[TODO];第二个是具体的内容，包括log中解析出来的内容（hdr和txn）
-            //zhuhp[TODO];第三个是request信息，这个包含了cxid信息和hdr的type信息(注入create，createSession事件)
-            //zhuhp[TODO]; hdr中的clientID和cxid并不是一个东西，至少目前来看不是一个类属性，两者的用途和区别有待观察
             p.packet = pp;
             p.request = request;
             committedLog.add(p);
@@ -273,7 +270,10 @@ public class ZKDatabase {
         }
     }
 
-    
+
+    public List<ACL> aclForNode(DataNode n) {
+        return dataTree.getACL(n);
+    }
     /**
      * remove a cnxn from the datatree
      * @param cnxn the cnxn to remove from the datatree
@@ -356,15 +356,6 @@ public class ZKDatabase {
     }
 
     /**
-     * convert from long to the acl entry
-     * @param aclL the long for which to get the acl
-     * @return the acl corresponding to this long entry
-     */
-    public List<ACL> convertLong(Long aclL) {
-        return dataTree.convertLong(aclL);
-    }
-
-    /**
      * get data and stat for a path 
      * @param path the path being queried
      * @param stat the stat for this path
@@ -428,7 +419,7 @@ public class ZKDatabase {
      * @return the acl size of the datatree
      */
     public int getAclSize() {
-        return dataTree.longKeyMap.size();
+        return dataTree.aclCacheSize();
     }
 
     /**

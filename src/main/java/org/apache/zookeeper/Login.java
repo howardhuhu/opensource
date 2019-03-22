@@ -32,8 +32,10 @@ import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
 import javax.security.auth.callback.CallbackHandler;
 
-import org.apache.log4j.Logger;
 import org.apache.zookeeper.client.ZooKeeperSaslClient;
+import org.apache.zookeeper.common.Time;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import javax.security.auth.kerberos.KerberosTicket;
 import javax.security.auth.Subject;
 import java.util.Date;
@@ -41,7 +43,7 @@ import java.util.Random;
 import java.util.Set;
 
 public class Login {
-    Logger LOG = Logger.getLogger(Login.class);
+    private static final Logger LOG = LoggerFactory.getLogger(Login.class);
     public CallbackHandler callbackHandler;
 
     // LoginThread will sleep until 80% of time from last refresh to
@@ -73,7 +75,8 @@ public class Login {
     private String keytabFile = null;
     private String principal = null;
 
-    private long lastLogin = 0;
+    // Initialize 'lastLogin' to do a login at first time
+    private long lastLogin = Time.currentElapsedTime() - MIN_TIME_BEFORE_RELOGIN;
 
     /**
      * LoginThread constructor. The constructor starts the thread used
@@ -84,7 +87,7 @@ public class Login {
      *
      * @param callbackHandler
      *               Passed as second param to javax.security.auth.login.LoginContext().
-     * @throws LoginException
+     * @throws javax.security.auth.login.LoginException
      *               Thrown if authentication fails.
      */
     public Login(final String loginContextName, CallbackHandler callbackHandler)
@@ -127,7 +130,7 @@ public class Login {
                 LOG.info("TGT refresh thread started.");
                 while (true) {  // renewal thread's main loop. if it exits from here, thread will exit.
                     KerberosTicket tgt = getTGT();
-                    long now = System.currentTimeMillis();
+                    long now = Time.currentWallTime();
                     long nextRefresh;
                     Date nextRefreshDate;
                     if (tgt == null) {
@@ -155,7 +158,6 @@ public class Login {
                         if ((nextRefresh > expiry) ||
                                 ((now + MIN_TIME_BEFORE_RELOGIN) > expiry)) {
                             // expiry is before next scheduled refresh).
-                            LOG.info("refreshing now because expiry is before next scheduled refresh time.");
                             nextRefresh = now;
                         } else {
                             if (nextRefresh < (now + MIN_TIME_BEFORE_RELOGIN)) {
@@ -176,7 +178,9 @@ public class Login {
                             return;
                         }
                     }
-                    if (now < nextRefresh) {
+                    if (now == nextRefresh) {
+                        LOG.info("refreshing now because expiry is before next scheduled refresh time.");
+                    } else if (now < nextRefresh) {
                         Date until = new Date(nextRefresh);
                         LOG.info("TGT refresh sleeping until: " + until.toString());
                         try {
@@ -191,7 +195,7 @@ public class Login {
                                 + " clock sync between this host and KDC - (KDC's clock is likely ahead of this host)."
                                 + " Manual intervention will be required for this client to successfully authenticate."
                                 + " Exiting refresh thread.");
-                        return;
+                        break;
                     }
                     if (isUsingTicketCache) {
                         String cmd = "/usr/bin/kinit";
@@ -290,7 +294,7 @@ public class Login {
         }
         LoginContext loginContext = new LoginContext(loginContextName,callbackHandler);
         loginContext.login();
-        LOG.info("successfully logged in.");
+        LOG.info("{} successfully logged in.", loginContextName);
         return loginContext;
     }
 
@@ -304,7 +308,7 @@ public class Login {
                 (TICKET_RENEW_WINDOW + (TICKET_RENEW_JITTER * rng.nextDouble())));
         if (proposedRefresh > expires) {
             // proposedRefresh is too far in the future: it's after ticket expires: simply return now.
-            return System.currentTimeMillis();
+            return Time.currentWallTime();
         }
         else {
             return proposedRefresh;
@@ -316,7 +320,8 @@ public class Login {
         for(KerberosTicket ticket: tickets) {
             KerberosPrincipal server = ticket.getServer();
             if (server.getName().equals("krbtgt/" + server.getRealm() + "@" + server.getRealm())) {
-                LOG.debug("Found tgt " + ticket + ".");
+                LOG.debug("Client principal is \"" + ticket.getClient().getName() + "\".");
+                LOG.debug("Server principal is \"" + ticket.getServer().getName() + "\".");
                 return ticket;
             }
         }
@@ -324,7 +329,7 @@ public class Login {
     }
 
     private boolean hasSufficientTimeElapsed() {
-        long now = System.currentTimeMillis();
+        long now = Time.currentElapsedTime();
         if (now - getLastLogin() < MIN_TIME_BEFORE_RELOGIN ) {
             LOG.warn("Not attempting to re-login since the last re-login was " +
                     "attempted less than " + (MIN_TIME_BEFORE_RELOGIN/1000) + " seconds"+
@@ -370,7 +375,7 @@ public class Login {
 
     /**
      * Re-login a principal. This method assumes that {@link #login(String)} has happened already.
-     * @throws LoginException on a failure
+     * @throws javax.security.auth.login.LoginException on a failure
      */
     // c.f. HADOOP-6559
     private synchronized void reLogin()

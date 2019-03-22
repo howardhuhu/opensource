@@ -20,6 +20,8 @@
 package org.apache.zookeeper.txn;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class CreateSessionTxn implements Record {
   private int timeOut;
   public CreateSessionTxn() {

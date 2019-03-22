@@ -34,7 +34,7 @@ public class VerGen {
         System.exit(1);
     }
 
-    public static void generateFile(File outputDir, Version version, int rev, String buildDate)
+    public static void generateFile(File outputDir, Version version, String rev, String buildDate) throws IOException
     {
         String path = PACKAGE_NAME.replaceAll("\\.", "/");
         File pkgdir = new File(outputDir, path);
@@ -76,24 +76,21 @@ public class VerGen {
             w.write("\n");
             w.write("package " + PACKAGE_NAME + ";\n\n");
             w.write("public interface " + TYPE_NAME + " {\n");
-            w.write("    public static final int MAJOR=" + version.maj + ";\n");
-            w.write("    public static final int MINOR=" + version.min + ";\n");
-            w.write("    public static final int MICRO=" + version.micro + ";\n");
-            w.write("    public static final String QUALIFIER="
+            w.write("    int MAJOR=" + version.maj + ";\n");
+            w.write("    int MINOR=" + version.min + ";\n");
+            w.write("    int MICRO=" + version.micro + ";\n");
+            w.write("    String QUALIFIER="
                     + (version.qualifier == null ? null :
                         "\"" + version.qualifier + "\"")
                     + ";\n");
-            if (rev < 0) {
+            if (rev.equals("-1")) {
                 System.out.println("Unknown REVISION number, using " + rev);
             }
-            w.write("    public static final int REVISION=" + rev + ";\n");
-            w.write("    public static final String BUILD_DATE=\"" + buildDate
+            w.write("    int REVISION=-1; //TODO: remove as related to SVN VCS\n");
+            w.write("    String REVISION_HASH=\"" + rev + "\";\n");
+            w.write("    String BUILD_DATE=\"" + buildDate
                     + "\";\n");
             w.write("}\n");
-        } catch (IOException e) {
-            System.out.println("Unable to generate version.Info file: "
-                    + e.getMessage());
-            System.exit(1);
         } finally {
             if (w != null) {
                 try {
@@ -112,11 +109,11 @@ public class VerGen {
         public int micro;
         public String qualifier;
     }
-    
+
     public static Version parseVersionString(String input) {
         Version result = new Version();
 
-        Pattern p = Pattern.compile("^(\\d+).(\\d+).(\\d+)(-(.+))?$");
+        Pattern p = Pattern.compile("^(\\d+)\\.(\\d+)\\.(\\d+)((\\.\\d+)*)(-(.+))?$");
         Matcher m = p.matcher(input);
 
         if (!m.matches()) {
@@ -125,8 +122,8 @@ public class VerGen {
         result.maj = Integer.parseInt(m.group(1));
         result.min = Integer.parseInt(m.group(2));
         result.micro = Integer.parseInt(m.group(3));
-        if (m.groupCount() == 5) {
-            result.qualifier = m.group(5);
+        if (m.groupCount() == 7) {
+            result.qualifier = m.group(7);
         } else {
             result.qualifier = null;
         }
@@ -146,7 +143,7 @@ public class VerGen {
      *            <li>min - minor version number
      *            <li>micro - minor minor version number
      *            <li>qualifier - optional qualifier (dash followed by qualifier text)
-     *            <li>rev - current SVN revision number
+     *            <li>rev - current Git revision number
      *            <li>buildDate - date the build
      *            </ul>
      */
@@ -160,17 +157,21 @@ public class VerGen {
                         "Invalid version number format, must be \"x.y.z(-.*)?\"");
                 System.exit(1);
             }
-            int rev;
-            try {
-                rev = Integer.parseInt(args[1]);
-            } catch (NumberFormatException e) {
-                rev = -1;
+            String rev = args[1];
+            if (rev == null || rev.trim().isEmpty()) {
+                rev = "-1";
+            } else {
+                rev = rev.trim();
             }
             generateFile(new File("."), version, rev, args[2]);
         } catch (NumberFormatException e) {
             System.err.println(
                     "All version-related parameters must be valid integers!");
             throw e;
+        } catch (IOException e) {
+            System.out.println("Unable to generate version.Info file: "
+                    + e.getMessage());
+            System.exit(1);
         }
     }
 

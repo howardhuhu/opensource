@@ -21,10 +21,11 @@
 package org.apache.zookeeper.version;
 
 public interface Info {
-    public static final int MAJOR=3;
-    public static final int MINOR=4;
-    public static final int MICRO=5;
-    public static final String QUALIFIER=null;
-    public static final int REVISION=-1;
-    public static final String BUILD_DATE="08/16/2015 06:02 GMT";
+    int MAJOR=3;
+    int MINOR=4;
+    int MICRO=13;
+    String QUALIFIER=null;
+    int REVISION=-1; //TODO: remove as related to SVN VCS
+    String REVISION_HASH="2d71af4dbe22557fda74f9a9b4309b15a7487f03";
+    String BUILD_DATE="06/29/2018 17:04 GMT";
 }

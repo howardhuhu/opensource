@@ -18,14 +18,12 @@
 
 package org.apache.zookeeper.server.quorum;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.net.InetSocketAddress;
 
-import org.apache.jute.BinaryInputArchive;
 import org.apache.jute.Record;
 import org.apache.zookeeper.server.ObserverBean;
 import org.apache.zookeeper.server.Request;
+import org.apache.zookeeper.server.quorum.QuorumPeer.QuorumServer;
 import org.apache.zookeeper.server.util.SerializeUtils;
 import org.apache.zookeeper.txn.TxnHeader;
 
@@ -63,19 +61,19 @@ public class Observer extends Learner{
         zk.registerJMX(new ObserverBean(this, zk), self.jmxLocalPeerBean);
 
         try {
-            InetSocketAddress addr = findLeader();
-            LOG.info("Observing " + addr);
+            QuorumServer leaderServer = findLeader();
+            LOG.info("Observing " + leaderServer.addr);
             try {
-                connectToLeader(addr);
+                connectToLeader(leaderServer.addr, leaderServer.hostname);
                 long newLeaderZxid = registerWithLeader(Leader.OBSERVERINFO);
-                
+
                 syncWithLeader(newLeaderZxid);
                 QuorumPacket qp = new QuorumPacket();
-                while (self.isRunning()) {
+                while (this.isRunning()) {
                     readPacket(qp);
                     processPacket(qp);                   
                 }
-            } catch (IOException e) {
+            } catch (Exception e) {
                 LOG.warn("Exception when observing the leader", e);
                 try {
                     sock.close();
@@ -127,6 +125,8 @@ public class Observer extends Learner{
             ObserverZooKeeperServer obs = (ObserverZooKeeperServer)zk;
             obs.commitRequest(request);            
             break;
+        default:
+            LOG.error("Invalid packet type: {} received by Observer", qp.getType());
         }
     }
 

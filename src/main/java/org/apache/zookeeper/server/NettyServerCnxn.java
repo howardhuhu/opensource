@@ -25,20 +25,19 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.Writer;
-import java.lang.management.ManagementFactory;
-import java.lang.management.OperatingSystemMXBean;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.util.AbstractSet;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.jute.BinaryInputArchive;
 import org.apache.jute.BinaryOutputArchive;
 import org.apache.jute.Record;
+import org.apache.zookeeper.server.quorum.ProposalStats;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.zookeeper.Environment;
@@ -49,13 +48,12 @@ import org.apache.zookeeper.proto.WatcherEvent;
 import org.apache.zookeeper.server.quorum.Leader;
 import org.apache.zookeeper.server.quorum.LeaderZooKeeperServer;
 import org.apache.zookeeper.server.quorum.ReadOnlyZooKeeperServer;
+import org.apache.zookeeper.server.util.OSMXBean;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.MessageEvent;
-
-import com.sun.management.UnixOperatingSystemMXBean;
 
 public class NettyServerCnxn extends ServerCnxn {
     Logger LOG = LoggerFactory.getLogger(NettyServerCnxn.class);
@@ -92,30 +90,16 @@ public class NettyServerCnxn extends ServerCnxn {
             LOG.debug("close called for sessionid:0x"
                     + Long.toHexString(sessionId));
         }
-        synchronized(factory.cnxns){
-            // if this is not in cnxns then it's already closed
-            if (!factory.cnxns.remove(this)) {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("cnxns size:" + factory.cnxns.size());
-                }
-                return;
-            }
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("close in progress for sessionid:0x"
-                        + Long.toHexString(sessionId));
-            }
 
-            synchronized (factory.ipMap) {
-                Set<NettyServerCnxn> s =
-                    factory.ipMap.get(((InetSocketAddress)channel
-                            .getRemoteAddress()).getAddress());
-                s.remove(this);
-            }
-    
-            if (channel.isOpen()) {
-                channel.close();
-            }
-            factory.unregisterConnection(this);
+        // ZOOKEEPER-2743:
+        // Always unregister connection upon close to prevent
+        // connection bean leak under certain race conditions.
+        factory.unregisterConnection(this);
+
+        factory.removeCnxn(this);
+
+        if (channel.isOpen()) {
+            channel.close();
         }
     }
 
@@ -158,9 +142,13 @@ public class NettyServerCnxn extends ServerCnxn {
         ResumeMessageEvent(Channel channel) {
             this.channel = channel;
         }
+        @Override
         public Object getMessage() {return null;}
+        @Override
         public SocketAddress getRemoteAddress() {return null;}
+        @Override
         public Channel getChannel() {return channel;}
+        @Override
         public ChannelFuture getFuture() {return null;}
     };
     
@@ -198,6 +186,7 @@ public class NettyServerCnxn extends ServerCnxn {
     @Override
     public void setSessionId(long sessionId) {
         this.sessionId = sessionId;
+        factory.addSession(sessionId, this);
     }
 
     @Override
@@ -214,11 +203,20 @@ public class NettyServerCnxn extends ServerCnxn {
     @Override
     public void sendBuffer(ByteBuffer sendBuffer) {
         if (sendBuffer == ServerCnxnFactory.closeConn) {
-            channel.close();
+            close();
             return;
         }
         channel.write(wrappedBuffer(sendBuffer));
         packetSent();
+    }
+
+    @Override
+    public InetAddress getSocketAddress() {
+        if (channel == null) {
+            return null;
+        }
+
+        return ((InetSocketAddress)(channel.getRemoteAddress())).getAddress();
     }
 
     /**
@@ -381,7 +379,7 @@ public class NettyServerCnxn extends ServerCnxn {
             
         @Override
         public void commandRun() {
-            if (zkServer == null) {
+            if (!isZKServerRunning()) {
                 pw.println(ZK_NOT_SERVING);
             } else {
                 zkServer.dumpConf(pw);
@@ -396,11 +394,15 @@ public class NettyServerCnxn extends ServerCnxn {
         
         @Override
         public void commandRun() {
-            if (zkServer == null) {
+            if (!isZKServerRunning()) {
                 pw.println(ZK_NOT_SERVING);
             }
-            else { 
-                zkServer.serverStats().reset();
+            else {
+                ServerStats serverStats = zkServer.serverStats();
+                serverStats.reset();
+                if (serverStats.getServerState().equals("leader")) {
+                    ((LeaderZooKeeperServer)zkServer).getLeader().getProposalStats().reset();
+                }
                 pw.println("Server stats reset.");
             }
         }
@@ -413,7 +415,7 @@ public class NettyServerCnxn extends ServerCnxn {
         
         @Override
         public void commandRun() {
-            if (zkServer == null) {
+            if (!isZKServerRunning()) {
                 pw.println(ZK_NOT_SERVING);
             } else {
                 synchronized(factory.cnxns){
@@ -433,7 +435,7 @@ public class NettyServerCnxn extends ServerCnxn {
         
         @Override
         public void commandRun() {
-            if (zkServer == null) {
+            if (!isZKServerRunning()) {
                 pw.println(ZK_NOT_SERVING);
             }
             else {
@@ -454,7 +456,7 @@ public class NettyServerCnxn extends ServerCnxn {
         
         @Override
         public void commandRun() {
-            if (zkServer == null) {
+            if (!isZKServerRunning()) {
                 pw.println(ZK_NOT_SERVING);
             }
             else {   
@@ -479,11 +481,16 @@ public class NettyServerCnxn extends ServerCnxn {
                     }
                     pw.println();
                 }
-                pw.print(zkServer.serverStats().toString());
+                ServerStats serverStats = zkServer.serverStats();
+                pw.print(serverStats.toString());
                 pw.print("Node count: ");
                 pw.println(zkServer.getZKDatabase().getNodeCount());
+                if (serverStats.getServerState().equals("leader")) {
+                    Leader leader = ((LeaderZooKeeperServer)zkServer).getLeader();
+                    ProposalStats proposalStats = leader.getProposalStats();
+                    pw.printf("Proposal sizes last/min/max: %s%n", proposalStats.toString());
+                }
             }
-            
         }
     }
     
@@ -494,7 +501,7 @@ public class NettyServerCnxn extends ServerCnxn {
         
         @Override
         public void commandRun() {
-            if (zkServer == null) {
+            if (!isZKServerRunning()) {
                 pw.println(ZK_NOT_SERVING);
             } else {
                 // clone should be faster than iteration
@@ -521,7 +528,7 @@ public class NettyServerCnxn extends ServerCnxn {
 
         @Override
         public void commandRun() {
-            if (zkServer == null) {
+            if (!isZKServerRunning()) {
                 pw.println(ZK_NOT_SERVING);
             } else {
                 DataTree dt = zkServer.getZKDatabase().getDataTree();
@@ -545,7 +552,7 @@ public class NettyServerCnxn extends ServerCnxn {
 
         @Override
         public void commandRun() {
-            if(zkServer == null) {
+            if(!isZKServerRunning()) {
                 pw.println(ZK_NOT_SERVING);
                 return;
             }
@@ -571,13 +578,13 @@ public class NettyServerCnxn extends ServerCnxn {
             print("ephemerals_count", zkdb.getDataTree().getEphemeralsCount());
             print("approximate_data_size", zkdb.getDataTree().approximateDataSize());
 
-            OperatingSystemMXBean osMbean = ManagementFactory.getOperatingSystemMXBean();
-            if(osMbean != null && osMbean instanceof UnixOperatingSystemMXBean) {
-                UnixOperatingSystemMXBean unixos = (UnixOperatingSystemMXBean)osMbean;
-
-                print("open_file_descriptor_count", unixos.getOpenFileDescriptorCount());
-                print("max_file_descriptor_count", unixos.getMaxFileDescriptorCount());
+            OSMXBean osMbean = new OSMXBean();
+            if (osMbean != null && osMbean.getUnix() == true) {
+                print("open_file_descriptor_count", osMbean.getOpenFileDescriptorCount());
+                print("max_file_descriptor_count", osMbean.getMaxFileDescriptorCount());
             }
+
+            print("fsync_threshold_exceed_count", stats.getFsyncThresholdExceedCount());
 
             if(stats.getServerState().equals("leader")) {
                 Leader leader = ((LeaderZooKeeperServer)zkServer).getLeader();
@@ -585,6 +592,10 @@ public class NettyServerCnxn extends ServerCnxn {
                 print("followers", leader.getLearners().size());
                 print("synced_followers", leader.getForwardingFollowers().size());
                 print("pending_syncs", leader.getNumPendingSyncs());
+
+                print("last_proposal_size", leader.getProposalStats().getLastProposalSize());
+                print("max_proposal_size", leader.getProposalStats().getMaxProposalSize());
+                print("min_proposal_size", leader.getProposalStats().getMinProposalSize());
             }
         }
 
@@ -609,7 +620,7 @@ public class NettyServerCnxn extends ServerCnxn {
 
         @Override
         public void commandRun() {
-            if (zkServer == null) {
+            if (!isZKServerRunning()) {
                 pw.print("null");
             } else if (zkServer instanceof ReadOnlyZooKeeperServer) {
                 pw.print("ro");
@@ -619,23 +630,47 @@ public class NettyServerCnxn extends ServerCnxn {
         }
     }
 
+    private class NopCommand extends CommandThread {
+        private String msg;
+
+        public NopCommand(PrintWriter pw, String msg) {
+            super(pw);
+            this.msg = msg;
+        }
+
+        @Override
+        public void commandRun() {
+            pw.println(msg);
+        }
+    }
+
     /** Return if four letter word found and responded to, otw false **/
     private boolean checkFourLetterWord(final Channel channel,
             ChannelBuffer message, final int len) throws IOException
     {
         // We take advantage of the limited size of the length to look
         // for cmds. They are all 4-bytes which fits inside of an int
-        String cmd = cmd2String.get(len);
-        if (cmd == null) {
+        if (!ServerCnxn.isKnown(len)) {
             return false;
         }
+
         channel.setInterestOps(0).awaitUninterruptibly();
-        LOG.info("Processing " + cmd + " command from "
-                + channel.getRemoteAddress());
         packetReceived();
 
         final PrintWriter pwriter = new PrintWriter(
                 new BufferedWriter(new SendBufferWriter()));
+
+        String cmd = ServerCnxn.getCommandString(len);
+        // ZOOKEEPER-2693: don't execute 4lw if it's not enabled.
+        if (!ServerCnxn.isEnabled(cmd)) {
+            LOG.debug("Command {} is not executed because it is not in the whitelist.", cmd);
+            NopCommand nopCmd = new NopCommand(pwriter, cmd + " is not executed because it is not in the whitelist.");
+            nopCmd.start();
+            return true;
+        }
+
+        LOG.info("Processing " + cmd + " command from " + channel.getRemoteAddress());
+
         if (len == ruokCmd) {
             RuokCommand ruok = new RuokCommand(pwriter);
             ruok.start();
@@ -645,10 +680,9 @@ public class NettyServerCnxn extends ServerCnxn {
             tmask.start();
             return true;
         } else if (len == setTraceMaskCmd) {
-            ByteBuffer mask = ByteBuffer.allocate(4);
+            ByteBuffer mask = ByteBuffer.allocate(8);
             message.readBytes(mask);
-
-            bb.flip();
+            mask.flip();
             long traceMask = mask.getLong();
             ZooTrace.setTextTraceLevel(traceMask);
             SetTraceMaskCommand setMask = new SetTraceMaskCommand(pwriter, traceMask);
@@ -737,14 +771,14 @@ public class NettyServerCnxn extends ServerCnxn {
                         bb.flip();
 
                         ZooKeeperServer zks = this.zkServer;
-                        if (zks == null) {
+                        if (zks == null || !zks.isRunning()) {
                             throw new IOException("ZK down");
                         }
                         if (initialized) {
                             zks.processPacket(this, bb);
 
                             if (zks.shouldThrottle(outstandingCount.incrementAndGet())) {
-                                disableRecv();
+                                disableRecvNoWait();
                             }
                         } else {
                             LOG.debug("got conn req request from "
@@ -808,13 +842,17 @@ public class NettyServerCnxn extends ServerCnxn {
 
     @Override
     public void disableRecv() {
+        disableRecvNoWait().awaitUninterruptibly();
+    }
+    
+    private ChannelFuture disableRecvNoWait() {
         throttled = true;
         if (LOG.isDebugEnabled()) {
             LOG.debug("Throttling - disabling recv " + this);
         }
-        channel.setReadable(false).awaitUninterruptibly();
+        return channel.setReadable(false);
     }
-
+    
     @Override
     public long getOutstandingRequests() {
         return outstandingCount.longValue();
@@ -837,16 +875,23 @@ public class NettyServerCnxn extends ServerCnxn {
 
     /** Send close connection packet to the client.
      */
+    @Override
     public void sendCloseSession() {
         sendBuffer(ServerCnxnFactory.closeConn);
     }
 
     @Override
     protected ServerStats serverStats() {
-        if (zkServer == null) {
+        if (!isZKServerRunning()) {
             return null;
         }
         return zkServer.serverStats();
     }
 
+    /**
+     * @return true if the server is running, false otherwise.
+     */
+    boolean isZKServerRunning() {
+        return zkServer != null && zkServer.isRunning();
+    }
 }

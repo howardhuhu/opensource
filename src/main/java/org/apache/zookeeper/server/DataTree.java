@@ -22,16 +22,13 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.apache.jute.Index;
 import org.apache.jute.InputArchive;
 import org.apache.jute.OutputArchive;
 import org.apache.jute.Record;
@@ -45,12 +42,12 @@ import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.Watcher.Event;
 import org.apache.zookeeper.Watcher.Event.EventType;
 import org.apache.zookeeper.Watcher.Event.KeeperState;
-import org.apache.zookeeper.ZooDefs.Ids;
 import org.apache.zookeeper.ZooDefs.OpCode;
 import org.apache.zookeeper.common.PathTrie;
 import org.apache.zookeeper.data.ACL;
 import org.apache.zookeeper.data.Stat;
 import org.apache.zookeeper.data.StatPersisted;
+import org.apache.zookeeper.server.upgrade.DataNodeV1;
 import org.apache.zookeeper.txn.CheckVersionTxn;
 import org.apache.zookeeper.txn.CreateTxn;
 import org.apache.zookeeper.txn.DeleteTxn;
@@ -116,23 +113,7 @@ public class DataTree {
     private final Map<Long, HashSet<String>> ephemerals =
         new ConcurrentHashMap<Long, HashSet<String>>();
 
-    /**
-     * this is map from longs to acl's. It saves acl's being stored for each
-     * datanode.
-     */
-    public final Map<Long, List<ACL>> longKeyMap =
-        new HashMap<Long, List<ACL>>();
-
-    /**
-     * this a map from acls to long.
-     */
-    public final Map<List<ACL>, Long> aclKeyMap =
-        new HashMap<List<ACL>, Long>();
-
-    /**
-     * these are the number of acls that we have in the datatree
-     */
-    protected long aclIndex = 0;
+    private final ReferenceCountedACLCache aclCache = new ReferenceCountedACLCache();
 
     @SuppressWarnings("unchecked")
     public HashSet<String> getEphemerals(long sessionId) {
@@ -151,74 +132,6 @@ public class DataTree {
         return ephemerals;
     }
 
-    private long incrementIndex() {
-        return ++aclIndex;
-    }
-
-    /**
-     * compare two list of acls. if there elements are in the same order and the
-     * same size then return true else return false
-     *
-     * @param lista
-     *            the list to be compared
-     * @param listb
-     *            the list to be compared
-     * @return true if and only if the lists are of the same size and the
-     *         elements are in the same order in lista and listb
-     */
-    private boolean listACLEquals(List<ACL> lista, List<ACL> listb) {
-        if (lista.size() != listb.size()) {
-            return false;
-        }
-        for (int i = 0; i < lista.size(); i++) {
-            ACL a = lista.get(i);
-            ACL b = listb.get(i);
-            if (!a.equals(b)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /**
-     * converts the list of acls to a list of longs.
-     *
-     * @param acls
-     * @return a list of longs that map to the acls
-     */
-    public synchronized Long convertAcls(List<ACL> acls) {
-        if (acls == null)
-            return -1L;
-        // get the value from the map
-        Long ret = aclKeyMap.get(acls);
-        // could not find the map
-        if (ret != null)
-            return ret;
-        long val = incrementIndex();
-        longKeyMap.put(val, acls);
-        aclKeyMap.put(acls, val);
-        return val;
-    }
-
-    /**
-     * converts a list of longs to a list of acls.
-     *
-     * @param longVal
-     *            the list of longs
-     * @return a list of ACLs that map to longs
-     */
-    public synchronized List<ACL> convertLong(Long longVal) {
-        if (longVal == null)
-            return null;
-        if (longVal == -1L)
-            return Ids.OPEN_ACL_UNSAFE;
-        List<ACL> acls = longKeyMap.get(longVal);
-        if (acls == null) {
-            LOG.error("ERROR: ACL not available for long " + longVal);
-            throw new RuntimeException("Failed to fetch acls for " + longVal);
-        }
-        return acls;
-    }
 
     public Collection<Long> getSessions() {
         return ephemerals.keySet();
@@ -472,10 +385,8 @@ public class DataTree {
         }
         synchronized (parent) {
             Set<String> children = parent.getChildren();
-            if (children != null) {
-                if (children.contains(childName)) {
-                    throw new KeeperException.NodeExistsException();
-                }
+            if (children.contains(childName)) {
+                throw new KeeperException.NodeExistsException();
             }
             
             if (parentCVersion == -1) {
@@ -484,7 +395,7 @@ public class DataTree {
             }    
             parent.stat.setCversion(parentCVersion);
             parent.stat.setPzxid(zxid);
-            Long longval = convertAcls(acl);
+            Long longval = aclCache.convertAcls(acl);
             DataNode child = new DataNode(parent, data, longval, stat);
             parent.addChild(childName);
             nodes.put(path, child);
@@ -544,6 +455,9 @@ public class DataTree {
             throw new KeeperException.NoNodeException();
         }
         nodes.remove(path);
+        synchronized (node) {
+            aclCache.removeUsage(node.acl);
+        }
         DataNode parent = nodes.get(parentName);
         if (parent == null) {
             throw new KeeperException.NoNodeException();
@@ -682,14 +596,7 @@ public class DataTree {
             if (stat != null) {
                 n.copyStat(stat);
             }
-            ArrayList<String> children;
-            Set<String> childs = n.getChildren();
-            if (childs != null) {
-                children = new ArrayList<String>(childs.size());
-                children.addAll(childs);
-            } else {
-                children = new ArrayList<String>(0);
-            }
+            List<String> children = new ArrayList<String>(n.getChildren());
 
             if (watcher != null) {
                 childWatches.addWatch(path, watcher);
@@ -706,8 +613,9 @@ public class DataTree {
             throw new KeeperException.NoNodeException();
         }
         synchronized (n) {
+            aclCache.removeUsage(n.acl);
             n.stat.setAversion(version);
-            n.acl = convertAcls(acl);
+            n.acl = aclCache.convertAcls(acl);
             n.copyStat(stat);
             return stat;
         }
@@ -722,8 +630,24 @@ public class DataTree {
         }
         synchronized (n) {
             n.copyStat(stat);
-            return new ArrayList<ACL>(convertLong(n.acl));
+            return new ArrayList<ACL>(aclCache.convertLong(n.acl));
         }
+    }
+
+    public List<ACL> getACL(DataNode node) {
+        synchronized (node) {
+            return aclCache.convertLong(node.acl);
+        }
+    }
+
+    public Long getACL(DataNodeV1 oldDataNode) {
+        synchronized (oldDataNode) {
+            return aclCache.convertAcls(oldDataNode.acl);
+        }
+    }
+
+    public int aclCacheSize() {
+        return aclCache.size();
     }
 
     static public class ProcessTxnResult {
@@ -747,7 +671,7 @@ public class DataTree {
          * Equality is defined as the clientId and the cxid being the same. This
          * allows us to use hash tables to track completion of transactions.
          *
-         * @see Object#equals(Object)
+         * @see java.lang.Object#equals(java.lang.Object)
          */
         @Override
         public boolean equals(Object o) {
@@ -762,7 +686,7 @@ public class DataTree {
          * See equals() to find the rational for how this hashcode is generated.
          *
          * @see ProcessTxnResult#equals(Object)
-         * @see Object#hashCode()
+         * @see java.lang.Object#hashCode()
          */
         @Override
         public int hashCode() {
@@ -788,7 +712,7 @@ public class DataTree {
                 case OpCode.create:
                     CreateTxn createTxn = (CreateTxn) txn;
                     rc.path = createTxn.getPath();
-                    createNode(//zhuhp  ; 仅仅是更新了内存中的datatree的内容
+                    createNode(
                             createTxn.getPath(),
                             createTxn.getData(),
                             createTxn.getAcl(),
@@ -940,8 +864,6 @@ public class DataTree {
             try {
                 setCversionPzxid(parentName, cTxn.getParentCVersion(),
                         header.getZxid());
-                        //zhuhp[TODO];这段代码暗示了系统可能存在的现象： 写入新的子节点了，但是来不及更新pxid（写入snap文件），这个时候就往log中写入了一条create事件
-                        //zhuhp[TODO];也就是说，zk可能存在写入不完整的情况（只写了data，但是没有更新state，这是个比较有意思的现象，值得分析)
             } catch (KeeperException.NoNodeException e) {
                 LOG.error("Failed to set parent cversion for: " +
                       parentName, e);
@@ -1006,17 +928,12 @@ public class DataTree {
         int len = 0;
         synchronized (node) {
             Set<String> childs = node.getChildren();
-            if (childs != null) {
-                children = childs.toArray(new String[childs.size()]);
-            }
+            children = childs.toArray(new String[childs.size()]);
             len = (node.data == null ? 0 : node.data.length);
         }
         // add itself
         counts.count += 1;
         counts.bytes += len;
-        if (children == null || children.length == 0) {
-            return;
-        }
         for (String child : children) {
             getCounts(path + "/" + child, counts);
         }
@@ -1056,11 +973,9 @@ public class DataTree {
         String children[] = null;
         synchronized (node) {
             Set<String> childs = node.getChildren();
-            if (childs != null) {
-                children = childs.toArray(new String[childs.size()]);
-            }
+            children = childs.toArray(new String[childs.size()]);
         }
-        if (children == null || children.length == 0) {
+        if (children.length == 0) {
             // this node does not have a child
             // is the leaf node
             // check if its the leaf node
@@ -1111,26 +1026,28 @@ public class DataTree {
             return;
         }
         String children[] = null;
+        DataNode nodeCopy;
         synchronized (node) {
             scount++;
-            oa.writeString(pathString, "path");
-            oa.writeRecord(node, "node");
+            StatPersisted statCopy = new StatPersisted();
+            copyStatPersisted(node.stat, statCopy);
+            //we do not need to make a copy of node.data because the contents
+            //are never changed
+            nodeCopy = new DataNode(node.parent, node.data, node.acl, statCopy);
             Set<String> childs = node.getChildren();
-            if (childs != null) {
-                children = childs.toArray(new String[childs.size()]);
-            }
+            children = childs.toArray(new String[childs.size()]);
         }
+        oa.writeString(pathString, "path");
+        oa.writeRecord(nodeCopy, "node");
         path.append('/');
         int off = path.length();
-        if (children != null) {
-            for (String child : children) {
-                // since this is single buffer being resused
-                // we need
-                // to truncate the previous bytes of string.
-                path.delete(off, Integer.MAX_VALUE);
-                path.append(child);
-                serializeNode(oa, path);
-            }
+        for (String child : children) {
+            // since this is single buffer being resused
+            // we need
+            // to truncate the previous bytes of string.
+            path.delete(off, Integer.MAX_VALUE);
+            path.append(child);
+            serializeNode(oa, path);
         }
     }
 
@@ -1138,46 +1055,9 @@ public class DataTree {
 
     public boolean initialized = false;
 
-    private void deserializeList(Map<Long, List<ACL>> longKeyMap,
-            InputArchive ia) throws IOException {
-        int i = ia.readInt("map");
-        while (i > 0) {
-            Long val = ia.readLong("long");
-            if (aclIndex < val) {
-                aclIndex = val;
-            }
-            List<ACL> aclList = new ArrayList<ACL>();
-            Index j = ia.startVector("acls");
-            while (!j.done()) {
-                ACL acl = new ACL();
-                acl.deserialize(ia, "acl");
-                aclList.add(acl);
-                j.incr();
-            }
-            longKeyMap.put(val, aclList);
-            aclKeyMap.put(aclList, val);
-            i--;
-        }
-    }
-
-    private synchronized void serializeList(Map<Long, List<ACL>> longKeyMap,
-            OutputArchive oa) throws IOException {
-        oa.writeInt(longKeyMap.size(), "map");
-        Set<Map.Entry<Long, List<ACL>>> set = longKeyMap.entrySet();
-        for (Map.Entry<Long, List<ACL>> val : set) {
-            oa.writeLong(val.getKey(), "long");
-            List<ACL> aclList = val.getValue();
-            oa.startVector(aclList, "acls");
-            for (ACL acl : aclList) {
-                acl.serialize(oa, "acl");
-            }
-            oa.endVector(aclList, "acls");
-        }
-    }
-
     public void serialize(OutputArchive oa, String tag) throws IOException {
         scount = 0;
-        serializeList(longKeyMap, oa);
+        aclCache.serialize(oa);
         serializeNode(oa, new StringBuilder(""));
         // / marks end of stream
         // we need to check if clear had been called in between the snapshot.
@@ -1187,13 +1067,17 @@ public class DataTree {
     }
 
     public void deserialize(InputArchive ia, String tag) throws IOException {
-        deserializeList(longKeyMap, ia);
+        aclCache.deserialize(ia);
         nodes.clear();
+        pTrie.clear();
         String path = ia.readString("path");
         while (!path.equals("/")) {
             DataNode node = new DataNode();
             ia.readRecord(node, "node");
             nodes.put(path, node);
+            synchronized (node) {
+                aclCache.addUsage(node.acl);
+            }
             int lastSlash = path.lastIndexOf('/');
             if (lastSlash == -1) {
                 root = node;
@@ -1223,6 +1107,8 @@ public class DataTree {
         // update the quotas - create path trie
         // and also update the stat nodes
         setupQuota();
+
+        aclCache.purgeUnused();
     }
 
     /**
@@ -1247,16 +1133,18 @@ public class DataTree {
      * @param pwriter the output to write to
      */
     public void dumpEphemerals(PrintWriter pwriter) {
-        Set<Long> keys = ephemerals.keySet();
+        Set<Map.Entry<Long, HashSet<String>>> entrySet = ephemerals.entrySet();
         pwriter.println("Sessions with Ephemerals ("
-                + keys.size() + "):");
-        for (long k : keys) {
-            pwriter.print("0x" + Long.toHexString(k));
+                + entrySet.size() + "):");
+        for (Map.Entry<Long, HashSet<String>> entry : entrySet) {
+            pwriter.print("0x" + Long.toHexString(entry.getKey()));
             pwriter.println(":");
-            HashSet<String> tmp = ephemerals.get(k);
-            synchronized (tmp) {
-                for (String path : tmp) {
-                    pwriter.println("\t" + path);
+            HashSet<String> tmp = entry.getValue();
+            if (tmp != null) {
+                synchronized (tmp) {
+                    for (String path : tmp) {
+                        pwriter.println("\t" + path);
+                    }
                 }
             }
         }
@@ -1271,8 +1159,6 @@ public class DataTree {
         root = null;
         nodes.clear();
         ephemerals.clear();
-        // dataWatches = null;
-        // childWatches = null;
     }
 
     public void setWatches(long relativeZxid, List<String> dataWatches,
@@ -1280,53 +1166,33 @@ public class DataTree {
             Watcher watcher) {
         for (String path : dataWatches) {
             DataNode node = getNode(path);
-            WatchedEvent e = null;
             if (node == null) {
-                e = new WatchedEvent(EventType.NodeDeleted,
-                        KeeperState.SyncConnected, path);
-            } else if (node.stat.getCzxid() > relativeZxid) {
-                e = new WatchedEvent(EventType.NodeCreated,
-                        KeeperState.SyncConnected, path);
+                watcher.process(new WatchedEvent(EventType.NodeDeleted,
+                            KeeperState.SyncConnected, path));
             } else if (node.stat.getMzxid() > relativeZxid) {
-                e = new WatchedEvent(EventType.NodeDataChanged,
-                        KeeperState.SyncConnected, path);
-            }
-            if (e != null) {
-                watcher.process(e);
+                watcher.process(new WatchedEvent(EventType.NodeDataChanged,
+                            KeeperState.SyncConnected, path));
             } else {
                 this.dataWatches.addWatch(path, watcher);
             }
         }
         for (String path : existWatches) {
             DataNode node = getNode(path);
-            WatchedEvent e = null;
-            if (node == null) {
-                // This is the case when the watch was registered
-            } else if (node.stat.getMzxid() > relativeZxid) {
-                e = new WatchedEvent(EventType.NodeDataChanged,
-                        KeeperState.SyncConnected, path);
-            } else {
-                e = new WatchedEvent(EventType.NodeCreated,
-                        KeeperState.SyncConnected, path);
-            }
-            if (e != null) {
-                watcher.process(e);
+            if (node != null) {
+                watcher.process(new WatchedEvent(EventType.NodeCreated,
+                            KeeperState.SyncConnected, path));
             } else {
                 this.dataWatches.addWatch(path, watcher);
             }
         }
         for (String path : childWatches) {
             DataNode node = getNode(path);
-            WatchedEvent e = null;
             if (node == null) {
-                e = new WatchedEvent(EventType.NodeDeleted,
-                        KeeperState.SyncConnected, path);
+                watcher.process(new WatchedEvent(EventType.NodeDeleted,
+                            KeeperState.SyncConnected, path));
             } else if (node.stat.getPzxid() > relativeZxid) {
-                e = new WatchedEvent(EventType.NodeChildrenChanged,
-                        KeeperState.SyncConnected, path);
-            }
-            if (e != null) {
-                watcher.process(e);
+                watcher.process(new WatchedEvent(EventType.NodeChildrenChanged,
+                            KeeperState.SyncConnected, path));
             } else {
                 this.childWatches.addWatch(path, watcher);
             }

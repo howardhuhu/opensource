@@ -20,18 +20,20 @@
 package org.apache.zookeeper.txn;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class MultiTxn implements Record {
-  private java.util.List<Txn> txns;
+  private java.util.List<org.apache.zookeeper.txn.Txn> txns;
   public MultiTxn() {
   }
   public MultiTxn(
-        java.util.List<Txn> txns) {
+        java.util.List<org.apache.zookeeper.txn.Txn> txns) {
     this.txns=txns;
   }
-  public java.util.List<Txn> getTxns() {
+  public java.util.List<org.apache.zookeeper.txn.Txn> getTxns() {
     return txns;
   }
-  public void setTxns(java.util.List<Txn> m_) {
+  public void setTxns(java.util.List<org.apache.zookeeper.txn.Txn> m_) {
     txns=m_;
   }
   public void serialize(OutputArchive a_, String tag) throws java.io.IOException {
@@ -40,7 +42,7 @@ public class MultiTxn implements Record {
       a_.startVector(txns,"txns");
       if (txns!= null) {          int len1 = txns.size();
           for(int vidx1 = 0; vidx1<len1; vidx1++) {
-            Txn e1 = (Txn) txns.get(vidx1);
+            org.apache.zookeeper.txn.Txn e1 = (org.apache.zookeeper.txn.Txn) txns.get(vidx1);
     a_.writeRecord(e1,"e1");
           }
       }
@@ -52,10 +54,10 @@ public class MultiTxn implements Record {
     a_.startRecord(tag);
     {
       Index vidx1 = a_.startVector("txns");
-      if (vidx1!= null) {          txns=new java.util.ArrayList<Txn>();
+      if (vidx1!= null) {          txns=new java.util.ArrayList<org.apache.zookeeper.txn.Txn>();
           for (; !vidx1.done(); vidx1.incr()) {
-    Txn e1;
-    e1= new Txn();
+    org.apache.zookeeper.txn.Txn e1;
+    e1= new org.apache.zookeeper.txn.Txn();
     a_.readRecord(e1,"e1");
             txns.add(e1);
           }
@@ -75,7 +77,7 @@ public class MultiTxn implements Record {
       a_.startVector(txns,"txns");
       if (txns!= null) {          int len1 = txns.size();
           for(int vidx1 = 0; vidx1<len1; vidx1++) {
-            Txn e1 = (Txn) txns.get(vidx1);
+            org.apache.zookeeper.txn.Txn e1 = (org.apache.zookeeper.txn.Txn) txns.get(vidx1);
     a_.writeRecord(e1,"e1");
           }
       }

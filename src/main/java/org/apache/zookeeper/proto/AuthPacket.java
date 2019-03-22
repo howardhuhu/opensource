@@ -20,6 +20,8 @@
 package org.apache.zookeeper.proto;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class AuthPacket implements Record {
   private int type;
   private String scheme;
@@ -104,7 +106,7 @@ public class AuthPacket implements Record {
     {
       byte[] my = auth;
       byte[] ur = peer.auth;
-      ret = Utils.compareBytes(my,0,my.length,ur,0,ur.length);
+      ret = org.apache.jute.Utils.compareBytes(my,0,my.length,ur,0,ur.length);
     }
     if (ret != 0) return ret;
      return ret;
@@ -122,7 +124,7 @@ public class AuthPacket implements Record {
     if (!ret) return ret;
     ret = scheme.equals(peer.scheme);
     if (!ret) return ret;
-    ret = Utils.bufEquals(auth,peer.auth);
+    ret = org.apache.jute.Utils.bufEquals(auth,peer.auth);
     if (!ret) return ret;
      return ret;
   }

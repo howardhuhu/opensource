@@ -21,8 +21,10 @@ package org.apache.zookeeper.server;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import javax.security.auth.login.Configuration;
 import javax.security.auth.login.LoginException;
@@ -45,7 +47,11 @@ public abstract class ServerCnxnFactory {
         public void processPacket(ByteBuffer packet, ServerCnxn src);
     }
     
-    Logger LOG = LoggerFactory.getLogger(ServerCnxnFactory.class);
+    private static final Logger LOG = LoggerFactory.getLogger(ServerCnxnFactory.class);
+
+    // sessionMap is used to speed up closeSession()
+    protected final ConcurrentMap<Long, ServerCnxn> sessionMap =
+            new ConcurrentHashMap<Long, ServerCnxn>();
 
     /**
      * The buffer will cause the connection to be close when we do a send.
@@ -60,6 +66,10 @@ public abstract class ServerCnxnFactory {
         synchronized(cnxns) {
             return cnxns.size();
         }
+    }
+
+    ZooKeeperServer getZooKeeperServer() {
+        return zkServer;
     }
 
     public abstract void closeSession(long sessionId);
@@ -102,8 +112,10 @@ public abstract class ServerCnxnFactory {
             serverCnxnFactoryName = NIOServerCnxnFactory.class.getName();
         }
         try {
-            return (ServerCnxnFactory) Class.forName(serverCnxnFactoryName)
-                                                .newInstance();
+            ServerCnxnFactory serverCnxnFactory = (ServerCnxnFactory) Class.forName(serverCnxnFactoryName)
+                    .getDeclaredConstructor().newInstance();
+            LOG.info("Using {} as server connection factory", serverCnxnFactoryName);
+            return serverCnxnFactory;
         } catch (Exception e) {
             IOException ioe = new IOException("Couldn't instantiate "
                     + serverCnxnFactoryName);
@@ -128,7 +140,8 @@ public abstract class ServerCnxnFactory {
 
     public abstract InetSocketAddress getLocalAddress();
 
-    private final HashMap<ServerCnxn, ConnectionBean> connectionBeans = new HashMap<ServerCnxn, ConnectionBean>();
+    private final Map<ServerCnxn, ConnectionBean> connectionBeans
+        = new ConcurrentHashMap<ServerCnxn, ConnectionBean>();
 
     protected final HashSet<ServerCnxn> cnxns = new HashSet<ServerCnxn>();
     public void unregisterConnection(ServerCnxn serverCnxn) {
@@ -149,6 +162,10 @@ public abstract class ServerCnxnFactory {
             }
         }
 
+    }
+
+    public void addSession(long sessionId, ServerCnxn cnxn) {
+        sessionMap.put(sessionId, cnxn);
     }
 
     /**

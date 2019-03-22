@@ -20,6 +20,8 @@
 package org.apache.zookeeper.proto;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class SetSASLResponse implements Record {
   private byte[] token;
   public SetSASLResponse() {
@@ -76,7 +78,7 @@ public class SetSASLResponse implements Record {
     {
       byte[] my = token;
       byte[] ur = peer.token;
-      ret = Utils.compareBytes(my,0,my.length,ur,0,ur.length);
+      ret = org.apache.jute.Utils.compareBytes(my,0,my.length,ur,0,ur.length);
     }
     if (ret != 0) return ret;
      return ret;
@@ -90,7 +92,7 @@ public class SetSASLResponse implements Record {
     }
     SetSASLResponse peer = (SetSASLResponse) peer_;
     boolean ret = false;
-    ret = Utils.bufEquals(token,peer.token);
+    ret = org.apache.jute.Utils.bufEquals(token,peer.token);
     if (!ret) return ret;
      return ret;
   }

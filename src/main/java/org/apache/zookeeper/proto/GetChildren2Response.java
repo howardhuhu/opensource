@@ -20,6 +20,8 @@
 package org.apache.zookeeper.proto;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class GetChildren2Response implements Record {
   private java.util.List<String> children;
   private org.apache.zookeeper.data.Stat stat;

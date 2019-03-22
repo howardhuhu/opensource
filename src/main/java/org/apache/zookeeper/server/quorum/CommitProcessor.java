@@ -26,6 +26,8 @@ import org.slf4j.LoggerFactory;
 import org.apache.zookeeper.ZooDefs.OpCode;
 import org.apache.zookeeper.server.Request;
 import org.apache.zookeeper.server.RequestProcessor;
+import org.apache.zookeeper.server.ZooKeeperCriticalThread;
+import org.apache.zookeeper.server.ZooKeeperServerListener;
 
 /**
  * This RequestProcessor matches the incoming committed requests with the
@@ -33,7 +35,7 @@ import org.apache.zookeeper.server.RequestProcessor;
  * change the state of the system will come back as incoming committed requests,
  * so we need to match them up.
  */
-public class CommitProcessor extends Thread implements RequestProcessor {
+public class CommitProcessor extends ZooKeeperCriticalThread implements RequestProcessor {
     private static final Logger LOG = LoggerFactory.getLogger(CommitProcessor.class);
 
     /**
@@ -52,12 +54,13 @@ public class CommitProcessor extends Thread implements RequestProcessor {
     /**
      * This flag indicates whether we need to wait for a response to come back from the
      * leader or we just let the sync operation flow through like a read. The flag will
-     * be true if the CommitProcessor is in a Leader pipeline.
+     * be false if the CommitProcessor is in a Leader pipeline.
      */
     boolean matchSyncs;
 
-    public CommitProcessor(RequestProcessor nextProcessor, String id, boolean matchSyncs) {
-        super("CommitProcessor:" + id);
+    public CommitProcessor(RequestProcessor nextProcessor, String id,
+            boolean matchSyncs, ZooKeeperServerListener listener) {
+        super("CommitProcessor:" + id, listener);
         this.nextProcessor = nextProcessor;
         this.matchSyncs = matchSyncs;
     }

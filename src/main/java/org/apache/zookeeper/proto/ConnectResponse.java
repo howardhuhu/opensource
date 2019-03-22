@@ -20,6 +20,8 @@
 package org.apache.zookeeper.proto;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class ConnectResponse implements Record {
   private int protocolVersion;
   private int timeOut;
@@ -118,7 +120,7 @@ public class ConnectResponse implements Record {
     {
       byte[] my = passwd;
       byte[] ur = peer.passwd;
-      ret = Utils.compareBytes(my,0,my.length,ur,0,ur.length);
+      ret = org.apache.jute.Utils.compareBytes(my,0,my.length,ur,0,ur.length);
     }
     if (ret != 0) return ret;
      return ret;
@@ -138,7 +140,7 @@ public class ConnectResponse implements Record {
     if (!ret) return ret;
     ret = (sessionId==peer.sessionId);
     if (!ret) return ret;
-    ret = Utils.bufEquals(passwd,peer.passwd);
+    ret = org.apache.jute.Utils.bufEquals(passwd,peer.passwd);
     if (!ret) return ret;
      return ret;
   }

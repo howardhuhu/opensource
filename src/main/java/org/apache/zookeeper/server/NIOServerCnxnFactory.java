@@ -39,11 +39,6 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
     private static final Logger LOG = LoggerFactory.getLogger(NIOServerCnxnFactory.class);
 
     static {
-        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
-                public void uncaughtException(Thread t, Throwable e) {
-                    LOG.error("Thread " + t + " died", e);
-                }
-            });
         /**
          * this is to avoid the jvm bug:
          * NullPointerException in Selector.open()
@@ -86,7 +81,7 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
     public void configure(InetSocketAddress addr, int maxcc) throws IOException {
         configureSaslLogin();
 
-        thread = new Thread(this, "NIOServerCxn.Factory:" + addr);
+        thread = new ZooKeeperThread(this, "NIOServerCxn.Factory:" + addr);
         thread.setDaemon(true);
         maxClientCnxns = maxcc;
         this.ss = ServerSocketChannel.open();
@@ -119,9 +114,9 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
     public void startup(ZooKeeperServer zks) throws IOException,
             InterruptedException {
         start();
+        setZooKeeperServer(zks);
         zks.startdata();
         zks.startup();
-        setZooKeeperServer(zks);
     }
 
     @Override
@@ -153,6 +148,29 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
                     s.add(cnxn);
                 }
             }
+        }
+    }
+
+    public void removeCnxn(NIOServerCnxn cnxn) {
+        synchronized(cnxns) {
+            // Remove the related session from the sessionMap.
+            long sessionId = cnxn.getSessionId();
+            if (sessionId != 0) {
+                sessionMap.remove(sessionId);
+            }
+
+            // if this is not in cnxns then it's already closed
+            if (!cnxns.remove(cnxn)) {
+                return;
+            }
+
+            synchronized (ipMap) {
+                Set<NIOServerCnxn> s =
+                        ipMap.get(cnxn.getSocketAddress());
+                s.remove(cnxn);
+            }
+
+            unregisterConnection(cnxn);
         }
     }
 
@@ -280,19 +298,12 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
 
     @SuppressWarnings("unchecked")
     private void closeSessionWithoutWakeup(long sessionId) {
-        HashSet<NIOServerCnxn> cnxns;
-        synchronized (this.cnxns) {
-            cnxns = (HashSet<NIOServerCnxn>)this.cnxns.clone();
-        }
-
-        for (NIOServerCnxn cnxn : cnxns) {
-            if (cnxn.getSessionId() == sessionId) {
-                try {
-                    cnxn.close();
-                } catch (Exception e) {
-                    LOG.warn("exception during session close", e);
-                }
-                break;
+        NIOServerCnxn cnxn = (NIOServerCnxn) sessionMap.remove(sessionId);
+        if (cnxn != null) {
+            try {
+                cnxn.close();
+            } catch (Exception e) {
+                LOG.warn("exception during session close", e);
             }
         }
     }

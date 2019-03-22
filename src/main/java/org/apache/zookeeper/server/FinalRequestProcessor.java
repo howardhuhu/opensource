@@ -23,6 +23,7 @@ import java.nio.ByteBuffer;
 import java.util.List;
 
 import org.apache.jute.Record;
+import org.apache.zookeeper.common.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.zookeeper.KeeperException;
@@ -165,7 +166,7 @@ public class FinalRequestProcessor implements RequestProcessor {
 
                 lastOp = "PING";
                 cnxn.updateStatsForResponse(request.cxid, request.zxid, lastOp,
-                        request.createTime, System.currentTimeMillis());
+                        request.createTime, Time.currentElapsedTime());
 
                 cnxn.sendResponse(new ReplyHeader(-2,
                         zks.getZKDatabase().getDataTreeLastProcessedZxid(), 0), null, "response");
@@ -176,7 +177,7 @@ public class FinalRequestProcessor implements RequestProcessor {
 
                 lastOp = "SESS";
                 cnxn.updateStatsForResponse(request.cxid, request.zxid, lastOp,
-                        request.createTime, System.currentTimeMillis());
+                        request.createTime, Time.currentElapsedTime());
 
                 zks.finishSessionInit(request.cnxn, true);
                 return;
@@ -281,11 +282,7 @@ public class FinalRequestProcessor implements RequestProcessor {
                 if (n == null) {
                     throw new KeeperException.NoNodeException();
                 }
-                Long aclL;
-                synchronized(n) {
-                    aclL = n.acl;
-                }
-                PrepRequestProcessor.checkACL(zks, zks.getZKDatabase().convertLong(aclL),
+                PrepRequestProcessor.checkACL(zks, zks.getZKDatabase().aclForNode(n),
                         ZooDefs.Perms.READ,
                         request.authInfo);
                 Stat stat = new Stat();
@@ -327,12 +324,7 @@ public class FinalRequestProcessor implements RequestProcessor {
                 if (n == null) {
                     throw new KeeperException.NoNodeException();
                 }
-                Long aclG;
-                synchronized(n) {
-                    aclG = n.acl;
-                    
-                }
-                PrepRequestProcessor.checkACL(zks, zks.getZKDatabase().convertLong(aclG), 
+                PrepRequestProcessor.checkACL(zks, zks.getZKDatabase().aclForNode(n),
                         ZooDefs.Perms.READ,
                         request.authInfo);
                 List<String> children = zks.getZKDatabase().getChildren(
@@ -351,11 +343,7 @@ public class FinalRequestProcessor implements RequestProcessor {
                 if (n == null) {
                     throw new KeeperException.NoNodeException();
                 }
-                Long aclG;
-                synchronized(n) {
-                    aclG = n.acl;
-                }
-                PrepRequestProcessor.checkACL(zks, zks.getZKDatabase().convertLong(aclG), 
+                PrepRequestProcessor.checkACL(zks, zks.getZKDatabase().aclForNode(n),
                         ZooDefs.Perms.READ,
                         request.authInfo);
                 List<String> children = zks.getZKDatabase().getChildren(
@@ -398,7 +386,7 @@ public class FinalRequestProcessor implements RequestProcessor {
 
         zks.serverStats().updateLatency(request.createTime);
         cnxn.updateStatsForResponse(request.cxid, lastZxid, lastOp,
-                    request.createTime, System.currentTimeMillis());
+                    request.createTime, Time.currentElapsedTime());
 
         try {
             cnxn.sendResponse(hdr, rsp, "response");

@@ -20,6 +20,8 @@
 package org.apache.zookeeper.data;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class StatPersistedV1 implements Record {
   private long czxid;
   private long mzxid;

@@ -21,6 +21,7 @@ package org.apache.zookeeper.server;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.Collections;
 
 import org.apache.jute.InputArchive;
 import org.apache.jute.OutputArchive;
@@ -58,6 +59,8 @@ public class DataNode implements Record {
      * should be synchronized on except deserializing (for speed up issues).
      */
     private Set<String> children = null;
+
+    private static final Set<String> EMPTY_SET = Collections.emptySet();
 
     /**
      * default constructor for the datanode
@@ -128,7 +131,11 @@ public class DataNode implements Record {
      * @return the children of this datanode
      */
     public synchronized Set<String> getChildren() {
-        return children;
+        if (children == null) {
+            return EMPTY_SET;
+        }
+
+        return Collections.unmodifiableSet(children);
     }
 
     synchronized public void copyStat(Stat to) {

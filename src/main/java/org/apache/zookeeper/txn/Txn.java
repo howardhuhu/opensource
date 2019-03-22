@@ -20,6 +20,8 @@
 package org.apache.zookeeper.txn;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class Txn implements Record {
   private int type;
   private byte[] data;
@@ -90,7 +92,7 @@ public class Txn implements Record {
     {
       byte[] my = data;
       byte[] ur = peer.data;
-      ret = Utils.compareBytes(my,0,my.length,ur,0,ur.length);
+      ret = org.apache.jute.Utils.compareBytes(my,0,my.length,ur,0,ur.length);
     }
     if (ret != 0) return ret;
      return ret;
@@ -106,7 +108,7 @@ public class Txn implements Record {
     boolean ret = false;
     ret = (type==peer.type);
     if (!ret) return ret;
-    ret = Utils.bufEquals(data,peer.data);
+    ret = org.apache.jute.Utils.bufEquals(data,peer.data);
     if (!ret) return ret;
      return ret;
   }

@@ -40,7 +40,7 @@ import org.slf4j.LoggerFactory;
 public class MBeanRegistry {
     private static final Logger LOG = LoggerFactory.getLogger(MBeanRegistry.class);
     
-    private static MBeanRegistry instance = new MBeanRegistry(); 
+    private static volatile MBeanRegistry instance = new MBeanRegistry();
     
     private Map<ZKMBeanInfo, String> mapBean2Path =
         new ConcurrentHashMap<ZKMBeanInfo, String>();
@@ -49,6 +49,10 @@ public class MBeanRegistry {
         new ConcurrentHashMap<String, ZKMBeanInfo>();
 
     private MBeanServer mBeanServer;
+
+    public static void setInstance(MBeanRegistry instance) {
+        MBeanRegistry.instance = instance;
+    }
 
     public static MBeanRegistry getInstance() {
         return instance;
@@ -89,13 +93,13 @@ public class MBeanRegistry {
             assert path != null;
         }
         path = makeFullPath(path, parent);
-        mapBean2Path.put(bean, path);
-        mapName2Bean.put(bean.getName(), bean);
         if(bean.isHidden())
             return;
         ObjectName oname = makeObjectName(path, bean);
         try {
             mBeanServer.registerMBean(bean, oname);
+            mapBean2Path.put(bean, path);
+            mapName2Bean.put(bean.getName(), bean);
         } catch (JMException e) {
             LOG.warn("Failed to register MBean " + bean.getName());
             throw e;

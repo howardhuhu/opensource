@@ -36,10 +36,12 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.Random;
 
+import org.apache.zookeeper.common.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.zookeeper.jmx.MBeanRegistry;
+import org.apache.zookeeper.server.ZooKeeperThread;
 import org.apache.zookeeper.server.quorum.Election;
 import org.apache.zookeeper.server.quorum.Vote;
 import org.apache.zookeeper.server.quorum.QuorumPeer.QuorumServer;
@@ -93,7 +95,7 @@ public class AuthFastLeaderElection implements Election {
         /*
          * current state of sender
          */
-        ServerState state;
+        QuorumPeer.ServerState state;
 
         /*
          * Address of the sender
@@ -138,7 +140,7 @@ public class AuthFastLeaderElection implements Election {
                 this.leader = leader;
                 this.zxid = zxid;
                 this.epoch = epoch;
-                this.state = ServerState.LOOKING;
+                this.state = QuorumPeer.ServerState.LOOKING;
                 this.tag = tag;
                 this.addr = addr;
 
@@ -181,7 +183,7 @@ public class AuthFastLeaderElection implements Election {
         /*
          * Current state;
          */
-        ServerState state;
+        QuorumPeer.ServerState state;
 
         /*
          * Message tag
@@ -263,16 +265,16 @@ public class AuthFastLeaderElection implements Election {
                     }
                     long tag = responseBuffer.getLong();
 
-                    ServerState ackstate = ServerState.LOOKING;
+                    QuorumPeer.ServerState ackstate = QuorumPeer.ServerState.LOOKING;
                     switch (responseBuffer.getInt()) {
                     case 0:
-                        ackstate = ServerState.LOOKING;
+                        ackstate = QuorumPeer.ServerState.LOOKING;
                         break;
                     case 1:
-                        ackstate = ServerState.LEADING;
+                        ackstate = QuorumPeer.ServerState.LEADING;
                         break;
                     case 2:
-                        ackstate = ServerState.FOLLOWING;
+                        ackstate = QuorumPeer.ServerState.FOLLOWING;
                         break;
                     }
 
@@ -376,7 +378,7 @@ public class AuthFastLeaderElection implements Election {
                             }
                         }
 
-                        if (ackstate != ServerState.LOOKING) {
+                        if (ackstate != QuorumPeer.ServerState.LOOKING) {
                             Notification outofsync = new Notification();
                             outofsync.leader = responseBuffer.getLong();
                             outofsync.zxid = responseBuffer.getLong();
@@ -410,8 +412,8 @@ public class AuthFastLeaderElection implements Election {
 
             WorkerSender(int attempts) {
                 maxAttempts = attempts;
-                rand = new Random(Thread.currentThread().getId()
-                        + System.currentTimeMillis());
+                rand = new Random(java.lang.Thread.currentThread().getId()
+                        + Time.currentElapsedTime());
             }
 
             long genChallenge() {
@@ -423,7 +425,7 @@ public class AuthFastLeaderElection implements Election {
                 buf[3] = (byte) ((challengeCounter & 0x000000ff));
 
                 challengeCounter++;
-                int secret = rand.nextInt(Integer.MAX_VALUE);
+                int secret = rand.nextInt(java.lang.Integer.MAX_VALUE);
 
                 buf[4] = (byte) ((secret & 0xff000000) >>> 24);
                 buf[5] = (byte) ((secret & 0x00ff0000) >>> 16);
@@ -587,12 +589,12 @@ public class AuthFastLeaderElection implements Election {
                                 ToSend crequest = new ToSend(
                                         ToSend.mType.crequest, m.tag, m.leader,
                                         m.zxid, m.epoch,
-                                        ServerState.LOOKING, m.addr);
+                                        QuorumPeer.ServerState.LOOKING, m.addr);
                                 sendqueue.offer(crequest);
 
                                 try {
                                     double timeout = ackWait
-                                            * Math.pow(2, attempts);
+                                            * java.lang.Math.pow(2, attempts);
 
                                     Semaphore s = new Semaphore(0);
                                     synchronized(Messenger.this) {
@@ -629,7 +631,7 @@ public class AuthFastLeaderElection implements Election {
                             try {
                                 Semaphore s = new Semaphore(0);
                                 double timeout = ackWait
-                                        * Math.pow(10, attempts);
+                                        * java.lang.Math.pow(10, attempts);
                                 ackMutex.put(m.tag, s);
                                 s.tryAcquire((int) timeout, TimeUnit.MILLISECONDS);
                             } catch (InterruptedException e) {
@@ -716,7 +718,7 @@ public class AuthFastLeaderElection implements Election {
             lastEpoch = 0;
 
             for (int i = 0; i < threads; ++i) {
-                Thread t = new Thread(new WorkerSender(3),
+                Thread t = new ZooKeeperThread(new WorkerSender(3),
                         "WorkerSender Thread: " + (i + 1));
                 t.setDaemon(true);
                 t.start();
@@ -728,8 +730,8 @@ public class AuthFastLeaderElection implements Election {
                 addrChallengeMap.put(saddr, new ConcurrentHashMap<Long, Long>());
             }
 
-            Thread t = new Thread(new WorkerReceiver(s, this),
-                    "WorkerReceiver Thread");
+            Thread t = new ZooKeeperThread(new WorkerReceiver(s, this),
+                    "WorkerReceiver-" + s.getRemoteSocketAddress());
             t.start();
         }
 
@@ -780,7 +782,7 @@ public class AuthFastLeaderElection implements Election {
 
             ToSend notmsg = new ToSend(ToSend.mType.notification,
                     AuthFastLeaderElection.sequencer++, proposedLeader,
-                    proposedZxid, logicalclock, ServerState.LOOKING,
+                    proposedZxid, logicalclock, QuorumPeer.ServerState.LOOKING,
                     self.getView().get(server.id).electionAddr);
 
             sendqueue.offer(notmsg);

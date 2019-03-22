@@ -20,14 +20,16 @@
 package org.apache.zookeeper.data;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class ACL implements Record {
   private int perms;
-  private Id id;
+  private org.apache.zookeeper.data.Id id;
   public ACL() {
   }
   public ACL(
         int perms,
-        Id id) {
+        org.apache.zookeeper.data.Id id) {
     this.perms=perms;
     this.id=id;
   }
@@ -37,10 +39,10 @@ public class ACL implements Record {
   public void setPerms(int m_) {
     perms=m_;
   }
-  public Id getId() {
+  public org.apache.zookeeper.data.Id getId() {
     return id;
   }
-  public void setId(Id m_) {
+  public void setId(org.apache.zookeeper.data.Id m_) {
     id=m_;
   }
   public void serialize(OutputArchive a_, String tag) throws java.io.IOException {
@@ -52,7 +54,7 @@ public class ACL implements Record {
   public void deserialize(InputArchive a_, String tag) throws java.io.IOException {
     a_.startRecord(tag);
     perms=a_.readInt("perms");
-    id= new Id();
+    id= new org.apache.zookeeper.data.Id();
     a_.readRecord(id,"id");
     a_.endRecord(tag);
 }

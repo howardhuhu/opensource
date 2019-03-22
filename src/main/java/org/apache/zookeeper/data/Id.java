@@ -20,6 +20,8 @@
 package org.apache.zookeeper.data;
 
 import org.apache.jute.*;
+import org.apache.yetus.audience.InterfaceAudience;
+@InterfaceAudience.Public
 public class Id implements Record {
   private String scheme;
   private String id;

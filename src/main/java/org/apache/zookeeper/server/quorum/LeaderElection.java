@@ -78,7 +78,7 @@ public class LeaderElection implements Election  {
         // different zxids for a server depending on timing.
         final HashMap<InetSocketAddress, Vote> validVotes = new HashMap<InetSocketAddress, Vote>();
         final Map<Long, Long> maxZxids = new HashMap<Long,Long>();
-        for (Entry<InetSocketAddress, Vote> e : votes.entrySet()) {
+        for (Map.Entry<InetSocketAddress, Vote> e : votes.entrySet()) {
             // Only include votes from machines that we heard from
             final Vote v = e.getValue();
             if (heardFrom.contains(v.getId())) {
@@ -92,7 +92,7 @@ public class LeaderElection implements Election  {
 
         // Make all zxids for a given vote id equal to the largest zxid seen for
         // that id
-        for (Entry<InetSocketAddress, Vote> e : validVotes.entrySet()) {
+        for (Map.Entry<InetSocketAddress, Vote> e : validVotes.entrySet()) {
             final Vote v = e.getValue();
             Long zxid = maxZxids.get(v.getId());
             if (v.getZxid() < zxid) {

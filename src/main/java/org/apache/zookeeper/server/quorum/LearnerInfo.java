@@ -25,13 +25,16 @@ import org.apache.yetus.audience.InterfaceAudience;
 public class LearnerInfo implements Record {
   private long serverid;
   private int protocolVersion;
+  private long configVersion;
   public LearnerInfo() {
   }
   public LearnerInfo(
         long serverid,
-        int protocolVersion) {
+        int protocolVersion,
+        long configVersion) {
     this.serverid=serverid;
     this.protocolVersion=protocolVersion;
+    this.configVersion=configVersion;
   }
   public long getServerid() {
     return serverid;
@@ -45,16 +48,24 @@ public class LearnerInfo implements Record {
   public void setProtocolVersion(int m_) {
     protocolVersion=m_;
   }
+  public long getConfigVersion() {
+    return configVersion;
+  }
+  public void setConfigVersion(long m_) {
+    configVersion=m_;
+  }
   public void serialize(OutputArchive a_, String tag) throws java.io.IOException {
     a_.startRecord(this,tag);
     a_.writeLong(serverid,"serverid");
     a_.writeInt(protocolVersion,"protocolVersion");
+    a_.writeLong(configVersion,"configVersion");
     a_.endRecord(this,tag);
   }
   public void deserialize(InputArchive a_, String tag) throws java.io.IOException {
     a_.startRecord(tag);
     serverid=a_.readLong("serverid");
     protocolVersion=a_.readInt("protocolVersion");
+    configVersion=a_.readLong("configVersion");
     a_.endRecord(tag);
 }
   public String toString() {
@@ -66,6 +77,7 @@ public class LearnerInfo implements Record {
       a_.startRecord(this,"");
     a_.writeLong(serverid,"serverid");
     a_.writeInt(protocolVersion,"protocolVersion");
+    a_.writeLong(configVersion,"configVersion");
       a_.endRecord(this,"");
       return new String(s.toByteArray(), "UTF-8");
     } catch (Throwable ex) {
@@ -91,6 +103,8 @@ public class LearnerInfo implements Record {
     if (ret != 0) return ret;
     ret = (protocolVersion == peer.protocolVersion)? 0 :((protocolVersion<peer.protocolVersion)?-1:1);
     if (ret != 0) return ret;
+    ret = (configVersion == peer.configVersion)? 0 :((configVersion<peer.configVersion)?-1:1);
+    if (ret != 0) return ret;
      return ret;
   }
   public boolean equals(Object peer_) {
@@ -106,6 +120,8 @@ public class LearnerInfo implements Record {
     if (!ret) return ret;
     ret = (protocolVersion==peer.protocolVersion);
     if (!ret) return ret;
+    ret = (configVersion==peer.configVersion);
+    if (!ret) return ret;
      return ret;
   }
   public int hashCode() {
@@ -115,9 +131,11 @@ public class LearnerInfo implements Record {
     result = 37*result + ret;
     ret = (int)protocolVersion;
     result = 37*result + ret;
+    ret = (int) (configVersion^(configVersion>>>32));
+    result = 37*result + ret;
     return result;
   }
   public static String signature() {
-    return "LLearnerInfo(li)";
+    return "LLearnerInfo(lil)";
   }
 }

@@ -22,10 +22,10 @@ package org.apache.zookeeper.version;
 
 public interface Info {
     int MAJOR=3;
-    int MINOR=4;
-    int MICRO=13;
-    String QUALIFIER=null;
+    int MINOR=5;
+    int MICRO=4;
+    String QUALIFIER="beta";
     int REVISION=-1; //TODO: remove as related to SVN VCS
-    String REVISION_HASH="2d71af4dbe22557fda74f9a9b4309b15a7487f03";
-    String BUILD_DATE="06/29/2018 17:04 GMT";
+    String REVISION_HASH="7f51e5b68cf2f80176ff944a9ebd2abbc65e7327";
+    String BUILD_DATE="05/11/2018 16:27 GMT";
 }
